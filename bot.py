@@ -328,6 +328,32 @@ def edge_tts_say(text, lang, out_wav):
     return False
 
 
+_CB = {}
+
+
+def chatterbox_say(text, lang, out_wav):
+    """Open-source Chatterbox Multilingual (MIT) on CPU. Optional voice_ref.wav in the repo = custom voice."""
+    if "m" not in _CB:
+        import torch
+        torch.set_num_threads(os.cpu_count() or 4)
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+        t0 = time.time()
+        _CB["m"] = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+        print(f"Chatterbox loaded in {time.time() - t0:.0f}s", flush=True)
+    m = _CB["m"]
+    kw = {"language_id": lang, "exaggeration": CONFIG.get("cb_exaggeration", 0.6),
+          "cfg_weight": CONFIG.get("cb_cfg", 0.4)}
+    ref = CONFIG.get("voice_ref", "voice_ref.wav")
+    if ref and os.path.exists(ref):
+        kw["audio_prompt_path"] = ref
+    wav = m.generate(text, **kw)
+    a = wav.squeeze().detach().cpu().numpy().astype(np.float32)
+    raw = out_wav + ".cb.wav"
+    write_wav(raw, a, m.sr)
+    run(["ffmpeg", "-y", "-i", raw, "-ar", "44100", "-ac", "1", out_wav])
+    return True
+
+
 MINIMAX_BOOST = {"en": "English", "ar": "Arabic", "he": "Hebrew"}
 MINIMAX_VOICES = ["English_radiant_girl", "Lively_Girl", "English_expressive_narrator"]
 
@@ -469,6 +495,26 @@ def synthesize(scenes, lang, tmp):
                 print("Voice engine: gemini (single request)", flush=True)
                 return "gemini"
             print("Could not split Gemini narration cleanly - using fallback voice", flush=True)
+    engine_pref = os.environ.get("VOICE_ENGINE", "").strip() or CONFIG.get("voice")
+    if engine_pref == "chatterbox" and lang in ("en", "he", "ar"):
+        t0, paths = time.time(), []
+        try:
+            for i, sc in enumerate(scenes):
+                if time.time() - t0 > CONFIG.get("cb_budget_s", 2700):
+                    print("Chatterbox too slow - stopping", flush=True)
+                    break
+                path = os.path.join(tmp, f"v{i}.wav")
+                chatterbox_say(sc["say"], lang, path)
+                paths.append(path)
+                print(f"  chatterbox scene {i + 1}/{len(scenes)} ({time.time() - t0:.0f}s)", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("Chatterbox failed:", str(e)[:300], flush=True)
+        if len(paths) == len(scenes):
+            for sc, p in zip(scenes, paths):
+                sc["voice"] = p
+            print(f"Voice engine: chatterbox ({time.time() - t0:.0f}s)", flush=True)
+            return "chatterbox"
+        print("Chatterbox unavailable - falling back", flush=True)
     mm_key = os.environ.get("MINIMAX_API_KEY", "").strip()
     if mm_key and lang in CONFIG.get("minimax_langs", []):
         state = {}
