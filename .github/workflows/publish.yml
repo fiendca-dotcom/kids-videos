@@ -13,9 +13,12 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core libraqm0
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji libraqm0
       - run: pip install Pillow numpy edge-tts google-api-python-client google-auth
       - if: ${{ github.event_name == 'workflow_dispatch' && inputs.test }}
         run: python bot.py --dry-run
@@ -28,7 +31,8 @@ jobs:
           python bot.py
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git add state.json && git commit -m "episode" && git push
-      - uses: actions/upload-artifact@v4
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: videos
           path: out/*.mp4
