@@ -1,10 +1,18 @@
-"""Kids learning videos -> YouTube, fully automatic (single file).
+"""Nuni the Owl - automatic kids learning videos for YouTube (v2, single file).
 
-Settings: edit CONFIG below. Texts/voices: edit LANGS below.
-    python bot.py --dry-run   make he/ar/en test videos into out/ (no upload)
-    python bot.py             make the next episode and upload it
+Each run makes one new episode in Hebrew, Arabic and English:
+  * Gemini writes a fresh script (letters / animals / riddles / story)
+  * Gemini TTS reads it in a warm, expressive voice (edge-tts fallback)
+  * Frames: animated backgrounds, talking owl mascot, colour emoji art, captions
+  * Original background music, 3-5 minutes per video
+
+    python bot.py --dry-run   make the 3 videos into out/ (no upload)
+    python bot.py             make + upload, then advance state.json
+Env: GEMINI_API_KEY (optional - offline fallback without it),
+     YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN (for upload)
 """
 import asyncio
+import base64
 import datetime
 import json
 import math
@@ -15,663 +23,660 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 
 CONFIG = {
     "languages": ["he", "ar", "en"],
+    "formats": ["animals", "letters", "riddles", "story"],
     "privacy": "public",
     "category_id": "27",
-    "width": 1920,
-    "height": 1080,
+    "width": 1280,
+    "height": 720,
     "fps": 24,
-    "tts_rate": "-15%",
-    "topics": [
-        "counting",
-        "colors",
-        "shapes"
-    ]
+    "text_model": "gemini-2.5-flash",
+    "tts_models": ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"],
+    "tts_gap_seconds": 6,  # pause between TTS calls (free-tier rate limit)
 }
 
-LANGS = {
+LANG = {
     "he": {
-        "voice": "he-IL-HilaNeural",
-        "numbers": [
-            "אחת",
-            "שתיים",
-            "שלוש",
-            "ארבע",
-            "חמש",
-            "שש",
-            "שבע",
-            "שמונה",
-            "תשע",
-            "עשר"
-        ],
-        "colors": {
-            "red": "אדום",
-            "blue": "כחול",
-            "yellow": "צהוב",
-            "green": "ירוק",
-            "orange": "כתום",
-            "purple": "סגול",
-            "pink": "ורוד",
-            "brown": "חום"
-        },
-        "shapes": {
-            "circle": "עיגול",
-            "square": "ריבוע",
-            "triangle": "משולש",
-            "star": "כוכב",
-            "heart": "לב",
-            "diamond": "מעוין"
-        },
-        "counting": {
-            "title": "בואו נספור עד {n}! | ספירה לילדים - פרק {ep}",
-            "intro_screen": "בואו נספור!",
-            "intro_say": "שלום ילדים! היום נספור ביחד עד {n}. מוכנים?",
-            "end_say": "כל הכבוד! ספרנו עד {n}!"
-        },
-        "colors_topic": {
-            "title": "לומדים צבעים! | צבעים לילדים - פרק {ep}",
-            "intro_screen": "לומדים צבעים!",
-            "intro_say": "שלום ילדים! בואו נלמד צבעים ביחד.",
-            "item_say": "זה {name}. {name}!",
-            "end_say": "כל הכבוד! למדנו הרבה צבעים!"
-        },
-        "shapes_topic": {
-            "title": "לומדים צורות! | צורות לילדים - פרק {ep}",
-            "intro_screen": "לומדים צורות!",
-            "intro_say": "שלום ילדים! בואו נכיר צורות ביחד.",
-            "item_say": "זה {name}. {name}!",
-            "end_say": "כל הכבוד! הכרנו צורות חדשות!"
-        },
-        "outro_screen": "להתראות!",
-        "outro_say": "להתראות ילדים! נתראה בפעם הבאה!",
-        "description": "סרטון לימודי קצר לילדים קטנים: ספירה, צבעים וצורות עם קריינות ברורה ודמויות שמחות.\nסרטון חדש כמה פעמים בשבוע.",
-        "tags": [
-            "ילדים",
-            "לימוד לילדים",
-            "ספירה",
-            "צבעים",
-            "צורות",
-            "גן ילדים",
-            "פעוטות"
-        ]
+        "name": "Hebrew", "mascot": "נוני", "gemini_voice": "Leda", "edge_voice": "he-IL-HilaNeural",
+        "alphabet": list("אבגדהוזחטיכלמנסעפצקרשת"),
+        "tags": ["ילדים", "לימוד לילדים", "נוני הינשופה", "שירים לילדים", "גן ילדים", "פעוטות"],
+        "desc": "נוני הינשופה מלמדת ילדים קטנים בדרך שמחה: אותיות, חיות, חידות וסיפורים.\nפרק חדש כמה פעמים בשבוע!",
     },
     "ar": {
-        "voice": "ar-SA-ZariyahNeural",
-        "numbers": [
-            "واحد",
-            "اثنان",
-            "ثلاثة",
-            "أربعة",
-            "خمسة",
-            "ستة",
-            "سبعة",
-            "ثمانية",
-            "تسعة",
-            "عشرة"
-        ],
-        "colors": {
-            "red": "أحمر",
-            "blue": "أزرق",
-            "yellow": "أصفر",
-            "green": "أخضر",
-            "orange": "برتقالي",
-            "purple": "بنفسجي",
-            "pink": "وردي",
-            "brown": "بني"
-        },
-        "shapes": {
-            "circle": "دائرة",
-            "square": "مربع",
-            "triangle": "مثلث",
-            "star": "نجمة",
-            "heart": "قلب",
-            "diamond": "معين"
-        },
-        "counting": {
-            "title": "هيا نعد حتى {n}! | تعلم الأرقام للأطفال - الحلقة {ep}",
-            "intro_screen": "هيا نعد!",
-            "intro_say": "مرحبا يا أطفال! اليوم سنعد معا حتى {n}. هل أنتم مستعدون؟",
-            "end_say": "أحسنتم! عددنا حتى {n}!"
-        },
-        "colors_topic": {
-            "title": "نتعلم الألوان! | الألوان للأطفال - الحلقة {ep}",
-            "intro_screen": "نتعلم الألوان!",
-            "intro_say": "مرحبا يا أطفال! هيا نتعلم الألوان معا.",
-            "item_say": "هذا {name}. {name}!",
-            "end_say": "أحسنتم! تعلمنا ألوانا كثيرة!"
-        },
-        "shapes_topic": {
-            "title": "نتعلم الأشكال! | الأشكال للأطفال - الحلقة {ep}",
-            "intro_screen": "نتعلم الأشكال!",
-            "intro_say": "مرحبا يا أطفال! هيا نتعرف على الأشكال معا.",
-            "item_say": "هذا {name}. {name}!",
-            "end_say": "أحسنتم! تعرفنا على أشكال جديدة!"
-        },
-        "outro_screen": "مع السلامة!",
-        "outro_say": "مع السلامة يا أطفال! نراكم في المرة القادمة!",
-        "description": "فيديو تعليمي قصير للأطفال الصغار: الأرقام والألوان والأشكال بصوت واضح وشخصيات سعيدة.\nفيديو جديد عدة مرات في الأسبوع.",
-        "tags": [
-            "أطفال",
-            "تعليم الأطفال",
-            "أرقام",
-            "ألوان",
-            "أشكال",
-            "روضة"
-        ]
+        "name": "Arabic", "mascot": "نوني", "gemini_voice": "Leda", "edge_voice": "ar-SA-ZariyahNeural",
+        "alphabet": list("ابتثجحخدذرزسشصضطظعغفقكلمنهوي"),
+        "tags": ["أطفال", "تعليم الأطفال", "نوني البومة", "حروف", "حيوانات", "روضة"],
+        "desc": "نوني البومة تعلم الأطفال الصغار بطريقة ممتعة: الحروف والحيوانات والألغاز والقصص.\nحلقة جديدة عدة مرات في الأسبوع!",
     },
     "en": {
-        "voice": "en-US-AnaNeural",
-        "numbers": [
-            "one",
-            "two",
-            "three",
-            "four",
-            "five",
-            "six",
-            "seven",
-            "eight",
-            "nine",
-            "ten"
-        ],
-        "colors": {
-            "red": "red",
-            "blue": "blue",
-            "yellow": "yellow",
-            "green": "green",
-            "orange": "orange",
-            "purple": "purple",
-            "pink": "pink",
-            "brown": "brown"
-        },
-        "shapes": {
-            "circle": "circle",
-            "square": "square",
-            "triangle": "triangle",
-            "star": "star",
-            "heart": "heart",
-            "diamond": "diamond"
-        },
-        "counting": {
-            "title": "Let's Count to {n}! | Counting for Kids - Episode {ep}",
-            "intro_screen": "Let's count!",
-            "intro_say": "Hello kids! Today we will count together to {n}. Are you ready?",
-            "end_say": "Great job! We counted to {n}!"
-        },
-        "colors_topic": {
-            "title": "Learn Colors! | Colors for Kids - Episode {ep}",
-            "intro_screen": "Learn colors!",
-            "intro_say": "Hello kids! Let's learn colors together.",
-            "item_say": "This is {name}. {name}!",
-            "end_say": "Great job! We learned lots of colors!"
-        },
-        "shapes_topic": {
-            "title": "Learn Shapes! | Shapes for Kids - Episode {ep}",
-            "intro_screen": "Learn shapes!",
-            "intro_say": "Hello kids! Let's meet some shapes together.",
-            "item_say": "This is a {name}. {name}!",
-            "end_say": "Great job! We met new shapes!"
-        },
-        "outro_screen": "Bye bye!",
-        "outro_say": "Bye bye kids! See you next time!",
-        "description": "A short learning video for little kids: counting, colors and shapes with clear narration and happy characters.\nNew videos several times a week.",
-        "tags": [
-            "kids",
-            "learning for kids",
-            "counting",
-            "colors",
-            "shapes",
-            "preschool",
-            "toddlers"
-        ]
-    }
+        "name": "English", "mascot": "Nuni", "gemini_voice": "Leda", "edge_voice": "en-US-AnaNeural",
+        "alphabet": list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+        "tags": ["kids", "learning for kids", "Nuni the owl", "ABC", "animals", "preschool"],
+        "desc": "Nuni the owl helps little kids learn in a happy way: letters, animals, riddles and stories.\nNew episodes several times a week!",
+    },
+}
+
+BGS = ["meadow", "forest", "sea", "night"]
+
+# ----------------------------------------------------------------- fallback content
+FALLBACK_ANIMALS = {
+    "he": [("🐄", "פרה", "מוּ מוּ"), ("🐶", "כלב", "הַב הַב"), ("🐱", "חתול", "מיאו"), ("🦆", "ברווז", "גַע גַע"),
+           ("🐑", "כבשה", "מֶה מֶה"), ("🐓", "תרנגול", "קוּקוּרִיקוּ"), ("🦁", "אריה", "רררר"), ("🐸", "צפרדע", "קְווה קְווה")],
+    "ar": [("🐄", "بقرة", "موو"), ("🐶", "كلب", "هاو هاو"), ("🐱", "قطة", "مياو"), ("🦆", "بطة", "واك واك"),
+           ("🐑", "خروف", "ماء ماء"), ("🐓", "ديك", "كوكوكوكو"), ("🦁", "أسد", "رووار"), ("🐸", "ضفدع", "نق نق")],
+    "en": [("🐄", "Cow", "moo"), ("🐶", "Dog", "woof woof"), ("🐱", "Cat", "meow"), ("🦆", "Duck", "quack quack"),
+           ("🐑", "Sheep", "baa"), ("🐓", "Rooster", "cock-a-doodle-doo"), ("🦁", "Lion", "roar"), ("🐸", "Frog", "ribbit")],
+}
+FALLBACK_TEXT = {
+    "he": {"title": "מי עושה את הקול? | חיות וקולות לילדים עם נוני", "hi": "שלום חברים! אני נוני הינשופה! היום נשחק משחק קולות של חיות. מוכנים?",
+           "q": "מי אומר {s}? מי זה?", "a": "נכון! זה {n}! ה{n} אומר {s}!", "bye": "כל הכבוד! הייתם מדהימים. להתראות, נתראה בפעם הבאה!"},
+    "ar": {"title": "من يصدر هذا الصوت؟ | أصوات الحيوانات للأطفال مع نوني", "hi": "مرحبا يا أصدقاء! أنا نوني البومة! اليوم سنلعب لعبة أصوات الحيوانات. هل أنتم مستعدون؟",
+           "q": "من يقول {s}؟ من هذا؟", "a": "صحيح! إنه {n}! {n} يقول {s}!", "bye": "أحسنتم! كنتم رائعين. مع السلامة، نراكم في المرة القادمة!"},
+    "en": {"title": "Who Makes This Sound? | Animal Sounds for Kids with Nuni", "hi": "Hello friends! I'm Nuni the owl! Today we'll play an animal sounds game. Are you ready?",
+           "q": "Who says {s}? Who is it?", "a": "Yes! It's the {n}! The {n} says {s}!", "bye": "Great job! You were amazing. Bye bye, see you next time!"},
 }
 
 
+def fallback_episode(lang):
+    T = FALLBACK_TEXT[lang]
+    sc = [{"say": T["hi"], "show": ["🦉"], "caption": "", "bg": "meadow", "hide": False, "intro": True}]
+    bgs = ["meadow", "forest", "meadow", "sea", "meadow", "forest", "meadow", "sea"]
+    for i, (e, n, s) in enumerate(FALLBACK_ANIMALS[lang]):
+        sc.append({"say": T["q"].format(s=s), "show": [e], "caption": "?", "bg": bgs[i], "hide": True})
+        sc.append({"say": T["a"].format(n=n, s=s), "show": [e], "caption": n, "bg": bgs[i], "hide": False, "reveal": True})
+    sc.append({"say": T["bye"], "show": ["🦉", "💖"], "caption": "", "bg": "night", "hide": False, "outro": True})
+    return {"title": T["title"], "scenes": sc}
 
-PALETTE = {
-    "red": (235, 64, 52), "blue": (52, 120, 235), "yellow": (250, 205, 40),
-    "green": (60, 185, 90), "orange": (250, 140, 30), "purple": (150, 80, 210),
-    "pink": (245, 120, 180), "brown": (140, 90, 50),
+
+# ----------------------------------------------------------------- Gemini
+def gemini_call(model, body, key, timeout=180):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+FORMAT_RULES = {
+    "animals": "Animal sounds game with 8 different animals (vary them from past episodes). For each animal make TWO scenes: "
+               "(1) a question scene with hide=true where {m} imitates the animal sound and asks the kids who it is; "
+               "(2) a reveal scene with reveal=true, the animal emoji, caption = animal name, and one tiny fun fact.",
+    "letters": "Letters lesson for these letters, in order: {letters}. For each letter: one scene with big=<the letter>, "
+               "caption=<the letter>, where {m} says the letter name and its sound; then TWO scenes each with a simple word that "
+               "STARTS with that letter (show = one emoji that pictures the word, caption = the word, big = the letter). "
+               "Finish with one quick review scene showing the letters.",
+    "riddles": "'Who am I?' riddle game with 7 riddles about animals, fruits, vehicles or everyday things. For each riddle make TWO "
+               "scenes: (1) question with hide=true and 2-3 very simple clues ending with 'Who am I?'; (2) reveal=true with the answer "
+               "emoji and caption = the answer word.",
+    "story": "A short, original, gentle story (14-18 scenes) starring {m} the owl and an animal friend, with a simple lesson "
+             "(sharing, kindness, bravery, saying sorry, patience...). Each scene shows 1-3 emoji of the characters/objects "
+             "in that moment, caption = 1-3 key words, bg chosen to fit the scene.",
 }
-BACKGROUNDS = [(255, 244, 214), (220, 240, 255), (232, 255, 228), (255, 228, 240), (240, 232, 255)]
-SHAPES = ["circle", "square", "triangle", "star", "heart", "diamond"]
-
-FONT_CANDIDATES = {
-    "he": ["/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf"],
-    "ar": ["/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"],
-    "any": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"],
-}
 
 
-def find_font(lang):
-    for p in FONT_CANDIDATES.get(lang, []) + FONT_CANDIDATES["any"]:
-        if os.path.exists(p):
-            return p
-    raise FileNotFoundError("No suitable font found (install fonts-dejavu-core / fonts-noto-core)")
-
-
-def darker(c, f=0.6):
-    return tuple(int(v * f) for v in c)
-
-
-# ---------------------------------------------------------------- shapes
-def shape_points(kind, cx, cy, s):
-    if kind == "triangle":
-        return [(cx, cy - s * 1.05), (cx + s * 1.15, cy + s * 0.85), (cx - s * 1.15, cy + s * 0.85)]
-    if kind == "diamond":
-        return [(cx, cy - s * 1.2), (cx + s * 0.9, cy), (cx, cy + s * 1.2), (cx - s * 0.9, cy)]
-    if kind == "star":
-        pts = []
-        for i in range(10):
-            r = s * 1.15 if i % 2 == 0 else s * 0.5
-            a = -math.pi / 2 + i * math.pi / 5
-            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-        return pts
-    if kind == "heart":
-        pts = []
-        for i in range(60):
-            t = 2 * math.pi * i / 60
-            x = 16 * math.sin(t) ** 3
-            y = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
-            pts.append((cx + x * s / 15, cy - y * s / 15 - s * 0.1))
-        return pts
+def gemini_script(lang, fmt, ep, past_titles, letters, key):
+    L = LANG[lang]
+    rules = FORMAT_RULES[fmt].format(m=L["mascot"], letters=" ".join(letters))
+    prompt = f"""You write scripts for a YouTube channel for children aged 2-6. Host: {L['mascot']}, a friendly, curious owl.
+Write episode {ep} in {L['name']} only (all text fields in {L['name']}, natural for native speakers, very simple words).
+Format: {rules}
+Rules:
+- First scene: intro (intro=true): {L['mascot']} greets the kids warmly and says what we'll do today.
+- Last scene: outro (outro=true): praise the kids and say goodbye until next time. Do NOT ask to like or subscribe.
+- 'say' = what {L['mascot']} says aloud: max 30 words, short sentences, cheerful, can include sounds like "Hooray!".
+- 'show' = 1-3 standard single emoji characters that picture the scene (no text, no flags).
+- 'caption' = max 4 words shown on screen. 'big' = optional single letter or number to show huge, else "".
+- 'bg' = one of: meadow, forest, sea, night.
+- Total 18-30 scenes. Safe, kind, no scary or violent content, no brands or known characters.
+- Make it different from these past episodes: {past_titles[-12:]}
+- 'title' = catchy YouTube title in {L['name']} (max 70 chars) that mentions {L['mascot']}.
+Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "caption": str, "big": str, "bg": str,
+"hide": bool, "reveal": bool, "intro": bool, "outro": bool}}]}}"""
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}
+    for attempt in range(3):
+        try:
+            r = gemini_call(CONFIG["text_model"], body, key)
+            data = json.loads(r["candidates"][0]["content"]["parts"][0]["text"])
+            scenes = [s for s in data["scenes"] if s.get("say")]
+            if len(scenes) >= 8:
+                data["scenes"] = scenes
+                return data
+        except Exception as e:  # noqa: BLE001
+            print(f"Gemini script attempt {attempt + 1} failed: {e}")
+            time.sleep(10)
     return None
 
 
-def draw_shape(d, kind, cx, cy, s, color, face=True):
-    if s < 2:
-        return
-    w = max(3, int(s * 0.07))
-    out = darker(color)
-    if kind == "circle":
-        d.ellipse([cx - s, cy - s, cx + s, cy + s], fill=color, outline=out, width=w)
-    elif kind == "square":
-        d.rounded_rectangle([cx - s, cy - s, cx + s, cy + s], radius=int(s * 0.2), fill=color, outline=out, width=w)
-    else:
-        d.polygon(shape_points(kind, cx, cy, s), fill=color, outline=out, width=w)
-    if not face:
-        return
-    fy = {"triangle": cy + s * 0.25, "heart": cy - s * 0.05}.get(kind, cy)
-    fs = s * (0.6 if kind in ("star", "triangle", "diamond") else 0.85)
-    for dx in (-0.35, 0.35):
-        ex, ey, er = cx + dx * fs, fy - 0.15 * fs, 0.17 * fs
-        d.ellipse([ex - er, ey - er, ex + er, ey + er], fill="white")
-        pr = er * 0.55
-        d.ellipse([ex - pr, ey - pr + er * 0.15, ex + pr, ey + pr + er * 0.15], fill=(30, 30, 30))
-    d.arc([cx - 0.32 * fs, fy - 0.05 * fs, cx + 0.32 * fs, fy + 0.4 * fs], 20, 160,
-          fill=(30, 30, 30), width=max(2, int(fs * 0.07)))
-
-
-def pop(t, dur=0.45):
-    """0 -> overshoot -> 1 scale animation."""
-    if t >= dur:
-        return 1.0
-    x = t / dur
-    c = 1.9
-    return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2
-
-
-# ---------------------------------------------------------------- scenes
-@dataclass
-class Scene:
-    say: str
-    painter: callable
-    bg: tuple
-    min_dur: float = 2.5
-    dur: float = 0.0
-    audio: str = ""
-
-
-@dataclass
-class Video:
-    title: str
-    scenes: list = field(default_factory=list)
-
-
-class Painter:
-    def __init__(self, W, H, font_path):
-        self.W, self.H, self.font_path = W, H, font_path
-        self._fonts = {}
-
-    def font(self, size):
-        if size not in self._fonts:
-            self._fonts[size] = ImageFont.truetype(self.font_path, size)
-        return self._fonts[size]
-
-    def text(self, d, txt, y, size, color=(255, 255, 255), stroke=(40, 40, 60), scale=1.0):
-        size = max(8, int(size * scale))
-        d.text((self.W / 2, y), txt, font=self.font(size), fill=color, anchor="mm",
-               stroke_width=max(2, size // 14), stroke_fill=stroke)
-
-
-def make_background(W, H, color, rng):
-    img = Image.new("RGB", (W, H), color)
-    d = ImageDraw.Draw(img)
-    for _ in range(40):
-        x, y, r = rng.randint(0, W), rng.randint(0, H), rng.randint(6, 22)
-        c = rng.choice(list(PALETTE.values()))
-        soft = tuple(int(a * 0.25 + b * 0.75) for a, b in zip(c, color))
-        d.ellipse([x - r, y - r, x + r, y + r], fill=soft)
-    return img
-
-
-def build_counting(lang, ep, rng, P):
-    n = rng.randint(5, 10)
-    kind = rng.choice(SHAPES)
-    cname = rng.choice(list(PALETTE))
-    color = PALETTE[cname]
-    L = lang["counting"]
-    W, H = P.W, P.H
-    rows = math.ceil(n / 5)
-    s = 85 if rows == 2 else 105
-    slots = []
-    for i in range(n):
-        r, c = divmod(i, 5)
-        in_row = min(5, n - r * 5)
-        x = W / 2 + (c - (in_row - 1) / 2) * 300
-        y = (720 if rows == 1 else 560 + r * 290)
-        slots.append((x, y))
-
-    scenes = []
-
-    rng_list = rng.sample(SHAPES, 3)
-    intro_cols = rng.sample(list(PALETTE), 3)
-
-    def intro(d, t):
-        P.text(d, L["intro_screen"], 330, 170, scale=pop(t))
-        for i, sh in enumerate(rng_list):
-            bob = math.sin(t * 3 + i) * 20
-            draw_shape(d, sh, W / 2 + (i - 1) * 380, 720 + bob, 110 * pop(max(0, t - 0.2 * i)), PALETTE[intro_cols[i]])
-
-    scenes.append(Scene(L["intro_say"].format(n=n), intro, rng.choice(BACKGROUNDS)))
-
-    bg = rng.choice(BACKGROUNDS)
-    for k in range(1, n + 1):
-        def paint(d, t, k=k):
-            P.text(d, str(k), 210, 260, color=color, stroke=darker(color, 0.45), scale=pop(t))
-            for i in range(k):
-                x, y = slots[i]
-                sc = pop(t) if i == k - 1 else 1.0
-                bob = math.sin(t * 4 + i) * 8
-                draw_shape(d, kind, x, y + bob, s * sc, color)
-        scenes.append(Scene(lang["numbers"][k - 1], paint, bg, min_dur=1.8))
-
-    def end(d, t):
-        P.text(d, f"1 - {n}", 260, 200, color=color, stroke=darker(color, 0.45), scale=pop(t))
-        for i in range(n):
-            x, y = slots[i]
-            jump = abs(math.sin(t * 5 + i * 0.6)) * 30
-            draw_shape(d, kind, x, y - jump, s, color)
-    scenes.append(Scene(L["end_say"].format(n=n), end, bg))
-    return L["title"].format(n=n, ep=ep), scenes
-
-
-def build_items(lang, ep, rng, P, topic):
-    W, H = P.W, P.H
-    L = lang["colors_topic" if topic == "colors" else "shapes_topic"]
-    scenes = []
-    intro_shapes = rng.sample(SHAPES, 3)
-    intro_cols = rng.sample(list(PALETTE), 3)
-
-    def intro(d, t):
-        P.text(d, L["intro_screen"], 330, 170, scale=pop(t))
-        for i, sh in enumerate(intro_shapes):
-            bob = math.sin(t * 3 + i) * 20
-            draw_shape(d, sh, W / 2 + (i - 1) * 380, 720 + bob, 110 * pop(max(0, t - 0.2 * i)), PALETTE[intro_cols[i]])
-    scenes.append(Scene(L["intro_say"], intro, rng.choice(BACKGROUNDS)))
-
-    if topic == "colors":
-        items = rng.sample(list(PALETTE), 6)
-    else:
-        items = rng.sample(SHAPES, 5)
-
-    for it in items:
-        if topic == "colors":
-            col, kind, name = PALETTE[it], rng.choice(SHAPES), lang["colors"][it]
-            txt_col = col
-        else:
-            col, kind, name = PALETTE[rng.choice(list(PALETTE))], it, lang["shapes"][it]
-            txt_col = (255, 255, 255)
-
-        def paint(d, t, col=col, kind=kind, name=name, txt_col=txt_col):
-            bob = math.sin(t * 3) * 15
-            draw_shape(d, kind, W / 2, 440 + bob, 260 * pop(t), col)
-            P.text(d, name, 900, 170, color=txt_col, stroke=darker(col, 0.45), scale=pop(max(0, t - 0.25)))
-        scenes.append(Scene(L["item_say"].format(name=name), paint, rng.choice(BACKGROUNDS), min_dur=3.0))
-
-    def end(d, t):
-        for i, it in enumerate(items):
-            col = PALETTE[it] if topic == "colors" else PALETTE[list(PALETTE)[i % 8]]
-            kind = SHAPES[i % 6] if topic == "colors" else it
-            x = W / 2 + (i - (len(items) - 1) / 2) * 290
-            jump = abs(math.sin(t * 5 + i * 0.7)) * 40
-            draw_shape(d, kind, x, 620 - jump, 100, col)
-    scenes.append(Scene(L["end_say"], end, rng.choice(BACKGROUNDS)))
-    return L["title"].format(ep=ep), scenes
-
-
-def outro_scene(lang, rng, P):
-    sh = rng.sample(SHAPES, 4)
-    cols = rng.sample(list(PALETTE), 4)
-
-    def paint(d, t):
-        P.text(d, lang["outro_screen"], 330, 190, scale=pop(t))
-        for i in range(4):
-            wave = math.sin(t * 6 + i) * 25
-            draw_shape(d, sh[i], P.W / 2 + (i - 1.5) * 330, 720 + wave, 100, PALETTE[cols[i]])
-    return Scene(lang["outro_say"], paint, rng.choice(BACKGROUNDS))
-
-
-# ---------------------------------------------------------------- audio
+# ----------------------------------------------------------------- speech
 def run(cmd):
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
 def probe_duration(path):
-    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                          "-of", "default=nw=1:nk=1", path], capture_output=True, text=True)
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                          "default=nw=1:nk=1", path], capture_output=True, text=True)
     return float(out.stdout.strip())
 
 
-async def _tts(text, voice, rate, path):
+def gemini_tts(text, lang, key, out_wav):
+    style = ("Read this aloud as a warm, playful, very cheerful host of a show for small children. "
+             "Speak clearly, a little slowly, with lots of expression and smiles in your voice:\n")
+    body = {"contents": [{"parts": [{"text": style + text}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": LANG[lang]["gemini_voice"]}}}}}
+    last = None
+    for model in CONFIG["tts_models"]:
+        for attempt in range(4):
+            try:
+                r = gemini_call(model, body, key)
+                part = r["candidates"][0]["content"]["parts"][0]["inlineData"]
+                pcm = base64.b64decode(part["data"])
+                raw = out_wav + ".pcm"
+                Path(raw).write_bytes(pcm)
+                run(["ffmpeg", "-y", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", raw, out_wav])
+                return True
+            except urllib.error.HTTPError as e:
+                last = f"{model} HTTP {e.code}"
+                if e.code in (429, 500, 503):
+                    time.sleep(20 * (attempt + 1))
+                    continue
+                break  # 404 etc. -> try next model
+            except Exception as e:  # noqa: BLE001
+                last = f"{model} {e}"
+                time.sleep(5)
+    print("Gemini TTS failed:", last)
+    return False
+
+
+async def _edge(text, voice, path):
     import edge_tts
-    await edge_tts.Communicate(text, voice, rate=rate).save(path)
+    await edge_tts.Communicate(text, voice, rate="-10%", pitch="+8Hz").save(path)
 
 
-def narrate(scenes, voice, rate, tmp):
+def edge_tts_say(text, lang, out_wav):
+    mp3 = out_wav + ".mp3"
+    for attempt in range(3):
+        try:
+            asyncio.run(_edge(text, LANG[lang]["edge_voice"], mp3))
+            run(["ffmpeg", "-y", "-i", mp3, out_wav])
+            return True
+        except Exception as e:  # noqa: BLE001
+            print("edge-tts retry", attempt + 1, e)
+            time.sleep(3)
+    return False
+
+
+def synthesize(scenes, lang, tmp):
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    engine = "gemini" if key else "edge"
     try:
         import edge_tts  # noqa: F401
-        have_tts = True
+        have_edge = True
     except ImportError:
-        have_tts = False
-        print("WARNING: edge-tts not installed - video will be silent")
-    for i, sc in enumerate(scenes):
-        clip = os.path.join(tmp, f"say{i}.mp3")
-        speech = 0.0
-        if have_tts:
-            for attempt in range(3):
-                try:
-                    asyncio.run(_tts(sc.say, voice, rate, clip))
-                    speech = probe_duration(clip)
-                    break
-                except Exception as e:  # network hiccup -> retry
-                    print(f"TTS retry {attempt + 1}: {e}")
+        have_edge = False
+    if engine == "edge" and not have_edge:
+        engine = "silent"
+    for attempt_engine in [engine, "edge", "silent"]:
+        if attempt_engine == "edge" and not have_edge:
+            continue
+        ok = True
+        for i, sc in enumerate(scenes):
+            path = os.path.join(tmp, f"v{i}.wav")
+            if attempt_engine == "gemini":
+                ok = gemini_tts(sc["say"], lang, key, path)
+                time.sleep(CONFIG["tts_gap_seconds"])
+            elif attempt_engine == "edge":
+                ok = edge_tts_say(sc["say"], lang, path)
             else:
-                raise RuntimeError("TTS failed 3 times")
-        else:
-            speech = 0.45 * len(sc.say.split()) + 0.5
-        sc.dur = max(sc.min_dur, speech + 1.0)
-        wav = os.path.join(tmp, f"scene{i}.wav")
-        if have_tts:
-            run(["ffmpeg", "-y", "-i", clip, "-af", "adelay=350:all=1,apad", "-t", f"{sc.dur:.3f}",
-                 "-ar", "44100", "-ac", "2", wav])
-        else:
-            run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                 "-t", f"{sc.dur:.3f}", wav])
-        sc.audio = wav
-        sc.silent = not have_tts
+                dur = 0.42 * len(sc["say"].split()) + 0.6
+                run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", f"{dur:.2f}", path])
+            if not ok:
+                print(f"{attempt_engine} failed at scene {i}; switching engine for the whole video")
+                break
+            sc["voice"] = path
+        if ok:
+            print("Voice engine:", attempt_engine)
+            return attempt_engine
+    raise RuntimeError("no speech engine worked")
 
 
-def music_track(scenes, path, seed, sr=44100):
-    """Fallback when there is no narration: a cheerful original melody + a 'pop' per scene."""
-    import numpy as np
-    import wave
+def load_mono(path, sr=44100):
+    tmpw = path + ".44k.wav"
+    run(["ffmpeg", "-y", "-i", path, "-ar", str(sr), "-ac", "1", tmpw])
+    with wave.open(tmpw) as w:
+        a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
+    return a
+
+
+# ----------------------------------------------------------------- music
+def music_track(total, seed, sr=44100):
     rng = random.Random(seed)
-    total = sum(sc.dur for sc in scenes)
     n = int(total * sr)
-    out = np.zeros(n)
-    scale = [0, 2, 4, 7, 9, 12, 14, 16]  # major pentatonic
+    out = np.zeros(n, dtype=np.float32)
+    scale = [0, 2, 4, 7, 9, 12, 14, 16]
     base = 261.63 * 2 ** (rng.choice([0, 2, 5, 7]) / 12)
-    beat = 60 / rng.choice([110, 120, 128])
-    phrase = [rng.choice(scale) for _ in range(8)]
-    chords = [0, 5, 7, 0]
-    t = 0.0
-    i = 0
+    beat = 60 / rng.choice([100, 108, 116])
+    phrases = [[rng.choice(scale) for _ in range(8)] for _ in range(2)]
+    prog = rng.choice([[0, 5, 7, 0], [0, 9, 5, 7], [0, 7, 9, 5]])
+    t, i = 0.0, 0
     while t < total:
-        note = phrase[i % 8] if (i // 8) % 4 != 3 else phrase[(7 - i) % 8]
+        bar = (i // 8) % 4
+        note = phrases[(i // 32) % 2][i % 8]
         f = base * 2 ** (note / 12)
         ln = int(beat * 0.9 * sr)
         tt = np.arange(ln) / sr
-        env = np.exp(-tt * 5)
-        tone = (np.sin(2 * np.pi * f * tt) + 0.3 * np.sin(4 * np.pi * f * tt)) * env * 0.16
+        tone = (np.sin(2 * np.pi * f * tt) + 0.25 * np.sin(4 * np.pi * f * tt)) * np.exp(-tt * 4) * 0.10
         if i % 2 == 0:
-            bf = base / 2 * 2 ** (chords[(i // 8) % 4] / 12)
-            tone += np.sin(2 * np.pi * bf * tt) * np.exp(-tt * 3) * 0.12
+            bf = base / 2 * 2 ** (prog[bar] / 12)
+            tone += np.sin(2 * np.pi * bf * tt) * np.exp(-tt * 2.5) * 0.09
+        if i % 4 == 2:  # soft shaker
+            tone[: int(0.05 * sr)] += np.random.default_rng(i).normal(0, 0.02, int(0.05 * sr)) * np.exp(-tt[: int(0.05 * sr)] * 60)
         a = int(t * sr)
         seg = tone[: max(0, min(ln, n - a))]
         out[a:a + len(seg)] += seg
-        t += beat / 2 if i % 4 == 3 else beat
+        t += beat / 2
         i += 1
-    start = 0.0
-    for sc in scenes:
-        a = int((start + 0.05) * sr)
-        ln = int(0.18 * sr)
-        tt = np.arange(ln) / sr
-        f = 600 + 900 * tt / 0.18
-        pop_s = np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-tt * 25) * 0.35
-        seg = pop_s[: max(0, min(ln, n - a))]
-        out[a:a + len(seg)] += seg
-        start += sc.dur
-    fade = int(1.5 * sr)
+    fade = int(2 * sr)
     out[-fade:] *= np.linspace(1, 0, fade)
-    out = np.clip(out, -1, 1)
-    pcm = (np.repeat(out[:, None], 2, axis=1) * 32767).astype("<i2")
-    with wave.open(path, "wb") as w:
-        w.setnchannels(2)
+    return out
+
+
+def chime(sr=44100):
+    tt = np.arange(int(0.5 * sr)) / sr
+    s = sum(np.sin(2 * np.pi * f * tt) for f in (1046.5, 1318.5, 1568)) * np.exp(-tt * 6) * 0.12
+    return s.astype(np.float32)
+
+
+def pop_sfx(sr=44100):
+    tt = np.arange(int(0.15 * sr)) / sr
+    f = 500 + 900 * tt / 0.15
+    return (np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-tt * 25) * 0.25).astype(np.float32)
+
+
+# ----------------------------------------------------------------- drawing helpers
+FONT_FILES = {
+    "he": ["/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf"],
+    "ar": ["/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"],
+    "en": ["/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"],
+    "any": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
+}
+EMOJI_FONT = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+
+
+def find_font(lang):
+    for p in FONT_FILES.get(lang, []) + FONT_FILES["any"]:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError("font")
+
+
+class Art:
+    def __init__(self, W, H, lang):
+        self.W, self.H = W, H
+        self.font_path = find_font(lang)
+        self.fonts = {}
+        self.efont = ImageFont.truetype(EMOJI_FONT, 109)
+        self.ecache = {}
+
+    def font(self, size):
+        size = max(8, int(size))
+        if size not in self.fonts:
+            self.fonts[size] = ImageFont.truetype(self.font_path, size)
+        return self.fonts[size]
+
+    def emoji(self, ch, size):
+        size = max(4, int(size))
+        k = (ch, size)
+        if k not in self.ecache:
+            base = self.ecache.get((ch, 0))
+            if base is None:
+                im = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+                ImageDraw.Draw(im).text((10, 10), ch, font=self.efont, embedded_color=True)
+                bb = im.getbbox()
+                if not bb or (bb[2] - bb[0]) < 40:
+                    im = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+                    ImageDraw.Draw(im).text((10, 10), "⭐", font=self.efont, embedded_color=True)
+                    bb = im.getbbox()
+                base = im.crop(bb)
+                self.ecache[(ch, 0)] = base
+            r = size / max(base.size)
+            self.ecache[k] = base.resize((max(1, int(base.width * r)), max(1, int(base.height * r))), Image.LANCZOS)
+        return self.ecache[k]
+
+    def text(self, img, txt, cx, cy, size, fill=(255, 255, 255), stroke=(50, 40, 90)):
+        if not txt:
+            return
+        d = ImageDraw.Draw(img)
+        f = self.font(size)
+        while d.textlength(txt, font=f) > self.W * 0.86 and size > 20:
+            size *= 0.9
+            f = self.font(size)
+        d.text((cx, cy), txt, font=f, fill=fill, anchor="mm", stroke_width=max(3, int(size / 11)), stroke_fill=stroke)
+
+
+def ease_back(x):
+    x = min(max(x, 0), 1)
+    c = 1.7
+    return max(0.0, 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2)
+
+
+def lerp(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def gradient(W, H, top, bottom):
+    g = np.linspace(0, 1, H)[:, None]
+    arr = (np.array(top)[None, None, :] * (1 - g[..., None]) + np.array(bottom)[None, None, :] * g[..., None])
+    arr = np.repeat(arr, W, axis=1).astype(np.uint8)
+    return Image.fromarray(arr, "RGB")
+
+
+class Backgrounds:
+    def __init__(self, W, H, seed):
+        self.W, self.H = W, H
+        self.rng = random.Random(seed)
+        self.static = {}
+        self.clouds = [(self.rng.uniform(0, W), self.rng.uniform(40, 200), self.rng.uniform(0.6, 1.2), self.rng.uniform(8, 20))
+                       for _ in range(5)]
+        self.stars = [(self.rng.uniform(0, W), self.rng.uniform(0, H * 0.6), self.rng.uniform(1.5, 3.5), self.rng.uniform(0, 6))
+                      for _ in range(90)]
+
+    def base(self, kind):
+        if kind in self.static:
+            return self.static[kind]
+        W, H = self.W, self.H
+        if kind == "night":
+            img = gradient(W, H, (20, 24, 70), (60, 50, 120))
+            d = ImageDraw.Draw(img)
+            d.ellipse([-200, H - 160, W * 0.7, H + 250], fill=(40, 70, 70))
+            d.ellipse([W * 0.4, H - 130, W + 250, H + 250], fill=(30, 60, 60))
+        elif kind == "sea":
+            img = gradient(W, H, (120, 200, 255), (210, 240, 255))
+            d = ImageDraw.Draw(img)
+            d.rectangle([0, H * 0.58, W, H], fill=(40, 150, 220))
+            d.ellipse([-100, H * 0.83, W * 0.6, H * 1.25], fill=(250, 220, 150))
+        else:
+            img = gradient(W, H, (110, 195, 255), (215, 240, 255))
+            d = ImageDraw.Draw(img)
+            d.ellipse([-250, H * 0.62, W * 0.65, H * 1.5], fill=(120, 205, 90))
+            d.ellipse([W * 0.35, H * 0.66, W + 300, H * 1.5], fill=(95, 185, 75))
+            r = random.Random(kind)
+            for _ in range(40):
+                x, y = r.uniform(0, W), r.uniform(H * 0.78, H * 0.98)
+                c = r.choice([(255, 120, 160), (255, 220, 80), (255, 255, 255), (190, 140, 255)])
+                d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=c)
+                d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 200, 40))
+            if kind == "forest":
+                for x in [70, 230, W - 230, W - 80]:
+                    d.rectangle([x - 18, H * 0.45, x + 18, H * 0.8], fill=(130, 85, 45))
+                    for dx, dy, rr in [(0, -40, 95), (-55, 10, 75), (55, 10, 75)]:
+                        d.ellipse([x + dx - rr, H * 0.42 + dy - rr, x + dx + rr, H * 0.42 + dy + rr], fill=(55, 150, 70))
+        self.static[kind] = img
+        return img
+
+    def draw(self, kind, t):
+        img = self.base(kind).copy()
+        d = ImageDraw.Draw(img, "RGBA")
+        W, H = self.W, self.H
+        if kind == "night":
+            d.ellipse([W - 250, 50, W - 150, 150], fill=(255, 250, 210))
+            d.ellipse([W - 225, 40, W - 135, 130], fill=(30, 34, 85))
+            for x, y, s, ph in self.stars:
+                a = int(150 + 105 * math.sin(t * 2 + ph))
+                d.ellipse([x - s, y - s, x + s, y + s], fill=(255, 255, 220, a))
+            return img
+        sx, sy = W - 160, 120
+        ang = t * 0.4
+        for k in range(12):
+            a = ang + k * math.pi / 6
+            d.polygon([(sx + 70 * math.cos(a - 0.08), sy + 70 * math.sin(a - 0.08)),
+                       (sx + 115 * math.cos(a), sy + 115 * math.sin(a)),
+                       (sx + 70 * math.cos(a + 0.08), sy + 70 * math.sin(a + 0.08))], fill=(255, 210, 60, 200))
+        d.ellipse([sx - 60, sy - 60, sx + 60, sy + 60], fill=(255, 220, 70))
+        for x0, y, sc, sp in self.clouds:
+            x = (x0 + t * sp) % (W + 300) - 150
+            for dx, dy, r in [(0, 0, 38), (40, -15, 45), (85, 0, 36), (40, 12, 40)]:
+                rr = r * sc
+                d.ellipse([x + dx * sc - rr, y + dy * sc - rr, x + dx * sc + rr, y + dy * sc + rr], fill=(255, 255, 255, 235))
+        if kind == "sea":
+            for row in range(4):
+                y0 = H * 0.6 + row * 28
+                pts = [(x, y0 + 6 * math.sin(x / 40 + t * 2 + row)) for x in range(0, W + 20, 20)]
+                d.line(pts, fill=(255, 255, 255, 120), width=4)
+        return img
+
+
+class Owl:
+    """Original mascot: Nuni the owl (code-drawn)."""
+
+    def draw(self, img, cx, cy, s, t, mouth, wave=0.0):
+        d = ImageDraw.Draw(img, "RGBA")
+        bob = math.sin(t * 3) * 4 * s
+        cy += bob
+        body, belly, dark = (155, 105, 200), (235, 215, 250), (95, 60, 140)
+        flap = math.sin(t * 12) * 10 * s * min(1, mouth * 3 + wave)
+        d.ellipse([cx - 95 * s, cy - 15 * s - flap, cx - 45 * s, cy + 75 * s - flap], fill=dark)
+        d.ellipse([cx + 45 * s, cy - 15 * s + (flap if wave == 0 else -flap * 2), cx + 95 * s, cy + 75 * s], fill=dark)
+        d.polygon([(cx - 60 * s, cy - 95 * s), (cx - 75 * s, cy - 140 * s), (cx - 25 * s, cy - 105 * s)], fill=dark)
+        d.polygon([(cx + 60 * s, cy - 95 * s), (cx + 75 * s, cy - 140 * s), (cx + 25 * s, cy - 105 * s)], fill=dark)
+        d.ellipse([cx - 80 * s, cy - 120 * s, cx + 80 * s, cy + 100 * s], fill=body)
+        d.ellipse([cx - 55 * s, cy - 20 * s, cx + 55 * s, cy + 92 * s], fill=belly)
+        blink = (t % 3.7) < 0.12
+        for ex in (-32, 32):
+            x, y = cx + ex * s, cy - 55 * s
+            d.ellipse([x - 30 * s, y - 30 * s, x + 30 * s, y + 30 * s], fill=(255, 255, 255), outline=dark, width=max(2, int(4 * s)))
+            if blink:
+                d.line([x - 22 * s, y, x + 22 * s, y], fill=(40, 30, 60), width=max(2, int(5 * s)))
+            else:
+                d.ellipse([x - 14 * s, y - 12 * s, x + 14 * s, y + 16 * s], fill=(40, 30, 60))
+                d.ellipse([x - 7 * s, y - 8 * s, x, y - 1 * s], fill=(255, 255, 255))
+        d.ellipse([cx - 78 * s, cy - 32 * s, cx - 50 * s, cy - 14 * s], fill=(255, 150, 190, 150))
+        d.ellipse([cx + 50 * s, cy - 32 * s, cx + 78 * s, cy - 14 * s], fill=(255, 150, 190, 150))
+        op = min(1.0, mouth * 4) * 16 * s
+        d.polygon([(cx - 14 * s, cy - 26 * s), (cx + 14 * s, cy - 26 * s), (cx, cy - 10 * s)], fill=(255, 170, 40))
+        d.polygon([(cx - 11 * s, cy - 18 * s), (cx + 11 * s, cy - 18 * s), (cx, cy - 4 * s + op)], fill=(240, 140, 30))
+        for fx in (-25, 25):
+            d.ellipse([cx + fx * s - 16 * s, cy + 90 * s, cx + fx * s + 16 * s, cy + 104 * s], fill=(255, 170, 40))
+
+
+# ----------------------------------------------------------------- render
+@dataclass
+class Scene:
+    data: dict
+    dur: float = 0.0
+    speech: float = 0.0
+    env: np.ndarray = field(default_factory=lambda: np.zeros(1))
+
+
+def render_video(episode, lang, out_path, seed, tmp):
+    W, H, fps = CONFIG["width"], CONFIG["height"], CONFIG["fps"]
+    raw = episode["scenes"]
+    synthesize(raw, lang, tmp)
+    scenes = []
+    sr = 44100
+    for sd in raw:
+        a = load_mono(sd["voice"], sr)
+        sp = len(a) / sr
+        pause = 3.6 if sd.get("hide") else (1.4 if sd.get("reveal") else 0.8)
+        dur = max(2.5, 0.35 + sp + pause)
+        hop = sr // fps
+        env = np.array([np.sqrt(np.mean(a[i:i + hop] ** 2)) if i < len(a) else 0 for i in range(0, int(dur * sr), hop)])
+        if env.max() > 0:
+            env = env / max(env.max(), 1e-3)
+        scenes.append(Scene(sd, dur, sp, env))
+        sd["_audio"] = a
+
+    total = sum(s.dur for s in scenes)
+    n = int(total * sr) + sr
+    voice = np.zeros(n, dtype=np.float32)
+    sfx = np.zeros(n, dtype=np.float32)
+    t0 = 0.0
+    for s in scenes:
+        a = s.data["_audio"]
+        st = int((t0 + 0.35) * sr)
+        voice[st:st + len(a)] += a[: max(0, n - st)]
+        fx = chime(sr) if s.data.get("reveal") else pop_sfx(sr)
+        st2 = int((t0 + (0.35 + s.speech + 0.2 if s.data.get("reveal") else 0.05)) * sr)
+        if s.data.get("reveal"):
+            st2 = int((t0 + 0.05) * sr)
+        sfx[st2:st2 + len(fx)] += fx[: max(0, n - st2)]
+        t0 += s.dur
+    mus = music_track(n / sr, seed, sr)[:n]
+    talk = np.convolve((np.abs(voice) > 0.02).astype(np.float32), np.ones(int(0.3 * sr)) / int(0.3 * sr), mode="same")
+    mix = voice * 1.0 + sfx + mus * (1.0 - 0.65 * np.clip(talk * 3, 0, 1))
+    mix = np.clip(mix / max(1.0, np.abs(mix).max() / 0.95), -1, 1)
+    audio_path = os.path.join(tmp, "mix.wav")
+    with wave.open(audio_path, "wb") as w:
+        w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(sr)
-        w.writeframes(pcm.tobytes())
+        w.writeframes((mix * 32767).astype("<i2").tobytes())
 
-
-# ---------------------------------------------------------------- render
-def render(scenes, W, H, fps, out_path, tmp, seed):
-    rng = random.Random(seed)
-    bg_cache = {}
+    art = Art(W, H, lang)
+    bgs = Backgrounds(W, H, seed)
+    owl = Owl()
     silent = os.path.join(tmp, "video.mp4")
-    ff = subprocess.Popen(["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-                           "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", "veryfast",
-                           "-crf", "22", "-pix_fmt", "yuv420p", silent],
+    ff = subprocess.Popen(["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps),
+                           "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", silent],
                           stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for sc in scenes:
-        if sc.bg not in bg_cache:
-            bg_cache[sc.bg] = make_background(W, H, sc.bg, rng)
-        base = bg_cache[sc.bg]
-        for f in range(int(round(sc.dur * fps))):
-            img = base.copy()
-            sc.painter(ImageDraw.Draw(img), f / fps)
+    gt = 0.0
+    for idx, s in enumerate(scenes):
+        sd = s.data
+        bg = sd.get("bg") if sd.get("bg") in BGS else "meadow"
+        show = [e for e in (sd.get("show") or []) if isinstance(e, str) and e.strip()][:3] or ["⭐"]
+        big = (sd.get("big") or "").strip()[:2]
+        cap = (sd.get("caption") or "").strip()
+        is_intro, is_outro = sd.get("intro"), sd.get("outro")
+        nf = int(round(s.dur * fps))
+        for f in range(nf):
+            t = f / fps
+            img = bgs.draw(bg, gt + t)
+            mouth = float(s.env[min(f, len(s.env) - 1)]) if t > 0.35 else 0.0
+            if is_intro or is_outro:
+                k = ease_back(t / 0.6)
+                owl.draw(img, W * 0.5, H * 0.58, 1.6 * k + 0.01, gt + t, mouth, wave=1.0)
+                if is_intro and episode.get("title"):
+                    art.text(img, episode["title"].split("|")[0].strip(), W / 2, 90, 54)
+                for i, e in enumerate(show[1:] if len(show) > 1 else []):
+                    em = art.emoji(e, 120 * ease_back((t - 0.3 - i * 0.2) / 0.5))
+                    img.paste(em, (int(W * 0.78 - em.width / 2), int(H * 0.45 - em.height / 2 + math.sin(t * 3 + i) * 10)), em)
+            else:
+                owl.draw(img, 150, H - 150, 0.85, gt + t, mouth)
+                k = ease_back((t - 0.1) / 0.5)
+                if sd.get("hide"):
+                    pulse = 1 + 0.06 * math.sin(t * 6)
+                    d = ImageDraw.Draw(img, "RGBA")
+                    r = max(2, 150 * k * pulse)
+                    d.ellipse([W / 2 - r, H * 0.5 - r, W / 2 + r, H * 0.5 + r], fill=(255, 255, 255, 220), outline=(255, 170, 40), width=10)
+                    art.text(img, "?", W / 2, H * 0.5, 230 * k * pulse, fill=(255, 140, 40), stroke=(120, 60, 20))
+                    cd_start = 0.35 + s.speech + 0.3
+                    if t > cd_start:
+                        num = 3 - int((t - cd_start) / 1.05)
+                        if num >= 1:
+                            frac = ((t - cd_start) % 1.05) / 1.05
+                            art.text(img, str(num), W - 170, H - 150, 140 * (1.2 - 0.4 * frac), fill=(255, 230, 60), stroke=(150, 80, 0))
+                else:
+                    n_e = len(show)
+                    size = {1: 300, 2: 240, 3: 200}[n_e] * (0.85 if big else 1.0)
+                    xs = [W / 2] if n_e == 1 else [W / 2 + (i - (n_e - 1) / 2) * size * 1.15 for i in range(n_e)]
+                    if big:
+                        xs = [x + 150 for x in xs]
+                        art.text(img, big, W / 2 - 230 if n_e == 1 else W * 0.18, H * 0.5, 300 * k, fill=(255, 90, 120), stroke=(255, 255, 255))
+                    for i, (x, e) in enumerate(zip(xs, show)):
+                        kk = ease_back((t - 0.1 - i * 0.15) / 0.5)
+                        em = art.emoji(e, size * kk + 1)
+                        y = H * 0.5 + math.sin((gt + t) * 2.5 + i) * 12
+                        img.paste(em, (int(x - em.width / 2), int(y - em.height / 2)), em)
+                    if sd.get("reveal") and t < 1.2:
+                        d = ImageDraw.Draw(img, "RGBA")
+                        for j in range(12):
+                            a = j * math.pi / 6
+                            rr = 120 + t * 260
+                            x, y = W / 2 + rr * math.cos(a), H * 0.5 + rr * math.sin(a)
+                            sz = 14 * (1.2 - t)
+                            d.polygon([(x, y - sz), (x + sz * 0.3, y - sz * 0.3), (x + sz, y), (x + sz * 0.3, y + sz * 0.3),
+                                       (x, y + sz), (x - sz * 0.3, y + sz * 0.3), (x - sz, y), (x - sz * 0.3, y - sz * 0.3)],
+                                      fill=(255, 230, 80, 230))
+                if cap and cap != "?":
+                    art.text(img, cap, W / 2, 85, 70 * ease_back((t - 0.25) / 0.5))
+            if t < 0.2 and idx > 0:
+                img = Image.blend(img, Image.new("RGB", (W, H), (255, 255, 255)), 0.6 * (1 - t / 0.2))
             ff.stdin.write(img.tobytes())
+        gt += s.dur
     ff.stdin.close()
     if ff.wait() != 0:
-        raise RuntimeError("ffmpeg video encode failed")
-
-    lst = os.path.join(tmp, "audio.txt")
-    with open(lst, "w") as fh:
-        for sc in scenes:
-            fh.write(f"file '{sc.audio}'\n")
-    audio = os.path.join(tmp, "audio.wav")
-    if getattr(scenes[0], "silent", False):
-        music_track(scenes, audio, seed)
-    else:
-        run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", audio])
-    run(["ffmpeg", "-y", "-i", silent, "-i", audio, "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+        raise RuntimeError("ffmpeg encode failed")
+    run(["ffmpeg", "-y", "-i", silent, "-i", audio_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
          "-shortest", "-movflags", "+faststart", out_path])
+    print(f"Rendered {out_path}: {len(scenes)} scenes, {total:.0f}s")
+    return total
 
 
-def make_video(topic, lang_code, episode, out_path, cfg):
-    lang = LANGS[lang_code]
-    W, H, fps = cfg["width"], cfg["height"], cfg["fps"]
-    rng = random.Random(f"{topic}-{episode}")
-    P = Painter(W, H, find_font(lang_code))
-    if topic == "counting":
-        title, scenes = build_counting(lang, episode, rng, P)
-    else:
-        title, scenes = build_items(lang, episode, rng, P, topic)
-    scenes.append(outro_scene(lang, rng, P))
+# ----------------------------------------------------------------- episode planning
+def plan_episode(lang, fmt, ep, state):
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    past = [h["title"] for h in state.get("history", []) if h.get("lang") == lang]
+    letters = []
+    if fmt == "letters":
+        alpha = LANG[lang]["alphabet"]
+        pos = state.setdefault("letter_pos", {}).get(lang, 0) % len(alpha)
+        letters = alpha[pos:pos + 4] or alpha[:4]
+    data = gemini_script(lang, fmt, ep, past, letters, key) if key else None
+    if not data:
+        print(f"Using offline fallback script for {lang}")
+        data = fallback_episode(lang)
+        fmt = "animals"
+    elif fmt == "letters":
+        state["letter_pos"][lang] = (state["letter_pos"].get(lang, 0) + len(letters)) % len(LANG[lang]["alphabet"])
+    return data, fmt
 
+
+def make_video(lang, fmt, ep, state, out_path):
+    data, fmt = plan_episode(lang, fmt, ep, state)
     tmp = tempfile.mkdtemp()
     try:
-        narrate(scenes, lang["voice"], cfg.get("tts_rate", "-15%"), tmp)
-        render(scenes, W, H, fps, out_path, tmp, episode)
+        render_video(data, lang, out_path, seed=ep * 7 + len(lang), tmp=tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    total = sum(s.dur for s in scenes)
-    print(f"Rendered {out_path}: {len(scenes)} scenes, {total:.0f}s")
-    return {"title": title[:100], "description": lang["description"], "tags": lang["tags"]}
+    title = data.get("title") or FALLBACK_TEXT[lang]["title"]
+    return {"title": title[:100], "description": LANG[lang]["desc"], "tags": LANG[lang]["tags"], "format": fmt}
 
 
-# ---------------------------------------------------------------- upload
+# ----------------------------------------------------------------- upload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
 def _refresh_token():
     raw = os.environ["YT_REFRESH_TOKEN"].strip()
-    if raw.startswith("{"):  # whole JSON response pasted - take refresh_token from it
+    if raw.startswith("{"):
         raw = json.loads(raw)["refresh_token"].strip()
     return raw
 
 
-def youtube_client():
+def upload(path, title, description, tags, language, privacy="public", category_id="27"):
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
-    creds = Credentials(
-        token=None,
-        refresh_token=_refresh_token(),
-        client_id=os.environ["YT_CLIENT_ID"].strip(),
-        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=SCOPES,
-    )
-    return build("youtube", "v3", credentials=creds, cache_discovery=False)
-
-
-def upload(path, title, description, tags, language, privacy="public", category_id="27"):
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
-    yt = youtube_client()
-    body = {
-        "snippet": {
-            "title": title,
-            "description": description,
-            "tags": tags,
-            "categoryId": category_id,
-            "defaultLanguage": language,
-            "defaultAudioLanguage": language,
-        },
-        "status": {
-            "privacyStatus": privacy,
-            "selfDeclaredMadeForKids": True,  # required for children's content (COPPA)
-            "containsSyntheticMedia": True,   # AI voice narration disclosure
-        },
-    }
+    creds = Credentials(token=None, refresh_token=_refresh_token(), client_id=os.environ["YT_CLIENT_ID"].strip(),
+                        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
+                        token_uri="https://oauth2.googleapis.com/token", scopes=SCOPES)
+    yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    body = {"snippet": {"title": title, "description": description, "tags": tags, "categoryId": category_id,
+                        "defaultLanguage": language, "defaultAudioLanguage": language},
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": True, "containsSyntheticMedia": True}}
     media = MediaFileUpload(path, mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
     req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
     response, retries = None, 0
@@ -686,37 +691,33 @@ def upload(path, title, description, tags, language, privacy="public", category_
                 time.sleep(2 ** retries)
                 continue
             raise
-    vid = response["id"]
-    print(f"Done: https://youtu.be/{vid} (privacy: {response['status']['privacyStatus']})")
-    return vid
+    print(f"Done: https://youtu.be/{response['id']} (privacy: {response['status']['privacyStatus']})")
+    return response["id"]
 
 
-# ---------------------------------------------------------------- main
+# ----------------------------------------------------------------- main
 def main():
-    ROOT.joinpath("out").mkdir(exist_ok=True)
+    (ROOT / "out").mkdir(exist_ok=True)
     state_path = ROOT / "state.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {"episode": 0, "history": []}
     ep = state["episode"] + 1
-    topic = CONFIG["topics"][(ep - 1) % len(CONFIG["topics"])]
-
-    if "--dry-run" in sys.argv:
-        for lang in ("he", "ar", "en"):
-            meta = make_video(topic, lang, ep, str(ROOT / "out" / f"video_{lang}.mp4"), CONFIG)
-            print(lang, "->", meta["title"])
-        return
-
-    from google.oauth2.credentials import Credentials  # noqa: F401
-    langs = CONFIG["languages"]
+    fmt = CONFIG["formats"][(ep - 1) % len(CONFIG["formats"])]
+    dry = "--dry-run" in sys.argv
+    langs = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--lang=")] or CONFIG["languages"]
     for lang in langs:
         out = ROOT / "out" / f"video_{lang}.mp4"
-        print(f"Episode {ep}: {topic} ({lang})")
-        meta = make_video(topic, lang, ep, str(out), CONFIG)
+        print(f"=== Episode {ep}: {fmt} ({lang})")
+        meta = make_video(lang, fmt, ep, state, str(out))
+        print("Title:", meta["title"])
+        if dry:
+            continue
         vid = upload(str(out), meta["title"], meta["description"], meta["tags"], lang,
-                     CONFIG.get("privacy", "public"), CONFIG.get("category_id", "27"))
-        state["history"].append({"episode": ep, "lang": lang, "topic": topic, "video_id": vid,
+                     CONFIG["privacy"], CONFIG["category_id"])
+        state["history"].append({"episode": ep, "lang": lang, "format": meta["format"], "video_id": vid,
                                  "title": meta["title"], "date": datetime.date.today().isoformat()})
-    state["episode"] = ep
-    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    if not dry:
+        state["episode"] = ep
+        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
