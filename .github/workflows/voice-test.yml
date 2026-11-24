@@ -1,0 +1,23 @@
+name: voice-test
+on: workflow_dispatch
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      PYTHONUNBUFFERED: "1"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      VOICE_ENGINE: chatterbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji libraqm0
+      - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu chatterbox-tts Pillow numpy edge-tts google-api-python-client google-auth
+      - run: python bot.py --dry-run --lang=en --lang=he --lang=ar
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-test
+          path: out/*.mp4
