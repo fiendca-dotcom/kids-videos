@@ -632,14 +632,21 @@ def make_video(topic, lang_code, episode, out_path, cfg):
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
+def _refresh_token():
+    raw = os.environ["YT_REFRESH_TOKEN"].strip()
+    if raw.startswith("{"):  # whole JSON response pasted - take refresh_token from it
+        raw = json.loads(raw)["refresh_token"].strip()
+    return raw
+
+
 def youtube_client():
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     creds = Credentials(
         token=None,
-        refresh_token=os.environ["YT_REFRESH_TOKEN"],
-        client_id=os.environ["YT_CLIENT_ID"],
-        client_secret=os.environ["YT_CLIENT_SECRET"],
+        refresh_token=_refresh_token(),
+        client_id=os.environ["YT_CLIENT_ID"].strip(),
+        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
         token_uri="https://oauth2.googleapis.com/token",
         scopes=SCOPES,
     )
