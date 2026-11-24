@@ -38,6 +38,7 @@ CONFIG = {
     "languages": ["he", "ar", "en"],
     "formats": ["animals", "letters", "riddles", "story"],
     "privacy": "public",
+    "voice": "edge",  # "edge" (Microsoft, free) or "gemini"
     "category_id": "27",
     "width": 1280,
     "height": 720,
@@ -353,7 +354,7 @@ def synthesize(scenes, lang, tmp):
         have_edge = True
     except ImportError:
         have_edge = False
-    if key:
+    if key and CONFIG.get("voice") == "gemini":
         whole = os.path.join(tmp, "whole.wav")
         if gemini_tts_script([s["say"] for s in scenes], lang, key, whole):
             a = load_mono(whole)
@@ -724,7 +725,7 @@ def render_video(episode, lang, out_path, seed, tmp):
                     xs = [W / 2] if n_e == 1 else [W / 2 + (i - (n_e - 1) / 2) * size * 1.15 for i in range(n_e)]
                     if big:
                         xs = [x + 150 for x in xs]
-                        art.text(img, big, W / 2 - 230 if n_e == 1 else W * 0.18, H * 0.5, 300 * k, fill=(255, 90, 120), stroke=(255, 255, 255))
+                        art.text(img, big, W / 2 - 230 if n_e == 1 else W * 0.3, H * 0.5, 300 * k, fill=(255, 90, 120), stroke=(255, 255, 255))
                     for i, (x, e) in enumerate(zip(xs, show)):
                         kk = ease_back((t - 0.1 - i * 0.15) / 0.5)
                         em = art.emoji(e, size * kk + 1)
