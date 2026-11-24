@@ -1,0 +1,15 @@
+name: tts-nv
+on: workflow_dispatch
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: python3 nv/tts_nv.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nv-audio
+          path: nv_audio/
