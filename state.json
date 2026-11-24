@@ -1,0 +1,29 @@
+{
+  "episode": 1,
+  "history": [
+    {
+      "episode": 1,
+      "lang": "he",
+      "topic": "counting",
+      "video_id": "Cz_jqyBdNac",
+      "title": "בואו נספור עד 10! | ספירה לילדים - פרק 1",
+      "date": "2026-11-24"
+    },
+    {
+      "episode": 1,
+      "lang": "ar",
+      "topic": "counting",
+      "video_id": "Auqv8TKf6B4",
+      "title": "هيا نعد حتى 10! | تعلم الأرقام للأطفال - الحلقة 1",
+      "date": "2026-11-24"
+    },
+    {
+      "episode": 1,
+      "lang": "en",
+      "topic": "counting",
+      "video_id": "79Rl10o_QQY",
+      "title": "Let's Count to 10! | Counting for Kids - Episode 1",
+      "date": "2026-11-24"
+    }
+  ]
+}
