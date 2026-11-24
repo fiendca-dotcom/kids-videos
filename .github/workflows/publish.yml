@@ -28,6 +28,9 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_REFRESH_TOKEN_HE: ${{ secrets.YT_REFRESH_TOKEN_HE }}
+          YT_REFRESH_TOKEN_AR: ${{ secrets.YT_REFRESH_TOKEN_AR }}
+          YT_REFRESH_TOKEN_EN: ${{ secrets.YT_REFRESH_TOKEN_EN }}
         run: |
           python bot.py
           git config user.name bot && git config user.email bot@users.noreply.github.com
