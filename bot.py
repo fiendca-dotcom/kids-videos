@@ -125,6 +125,40 @@ FORMAT_RULES = {
 }
 
 
+_MODELS = None
+
+
+def list_models(key):
+    global _MODELS
+    if _MODELS is None:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=200"
+            with urllib.request.urlopen(url, timeout=60) as r:
+                data = json.loads(r.read())
+            _MODELS = [(m["name"].split("/")[-1], m.get("supportedGenerationMethods", [])) for m in data.get("models", [])]
+            print("Gemini models:", ", ".join(n for n, _ in _MODELS if "flash" in n or "tts" in n), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("list models failed:", e, flush=True)
+            _MODELS = []
+    return _MODELS
+
+
+def pick_text_model(key):
+    bad = ("tts", "image", "lite", "live", "audio", "embedding", "thinking")
+    names = [n for n, m in list_models(key) if "generateContent" in m and "flash" in n and not any(x in n for x in bad)]
+    for pref in ("gemini-flash-latest", "gemini-3", "gemini-2.5-flash"):
+        for n in names:
+            if n.startswith(pref):
+                return n
+    return names[0] if names else CONFIG["text_model"]
+
+
+def pick_tts_models(key):
+    names = [n for n, _ in list_models(key) if "tts" in n]
+    ordered = [n for n in CONFIG["tts_models"] if n in names] + sorted([n for n in names if n not in CONFIG["tts_models"]], key=lambda n: "pro" in n)
+    return ordered or CONFIG["tts_models"]
+
+
 def gemini_script(lang, fmt, ep, past_titles, letters, key):
     L = LANG[lang]
     rules = FORMAT_RULES[fmt].format(m=L["mascot"], letters=" ".join(letters))
@@ -147,14 +181,16 @@ Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "caption": 
             "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}
     for attempt in range(3):
         try:
-            r = gemini_call(CONFIG["text_model"], body, key)
+            model = pick_text_model(key)
+            print("Script model:", model, flush=True)
+            r = gemini_call(model, body, key)
             data = json.loads(r["candidates"][0]["content"]["parts"][0]["text"])
             scenes = [s for s in data["scenes"] if s.get("say")]
             if len(scenes) >= 8:
                 data["scenes"] = scenes
                 return data
         except Exception as e:  # noqa: BLE001
-            print(f"Gemini script attempt {attempt + 1} failed: {e}")
+            print(f"Gemini script attempt {attempt + 1} failed: {e}", flush=True)
             time.sleep(10)
     return None
 
@@ -177,8 +213,9 @@ def gemini_tts(text, lang, key, out_wav, raw_prompt=False):
             "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {
                 "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": LANG[lang]["gemini_voice"]}}}}}
     last = None
-    for model in CONFIG["tts_models"]:
-        for attempt in range(4):
+    for model in pick_tts_models(key):
+        print("TTS model:", model, flush=True)
+        for attempt in range(3):
             try:
                 r = gemini_call(model, body, key, timeout=600)
                 part = r["candidates"][0]["content"]["parts"][0]["inlineData"]
