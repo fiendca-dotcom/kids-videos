@@ -167,6 +167,46 @@ def pick_tts_models(key):
     return ordered or CONFIG["tts_models"]
 
 
+TREND_CHANNELS = [  # big kids channels - public RSS (no key needed). Add more channel IDs any time.
+    "UCbCmjCuTUZos6Inko4u57UQ",  # CoComelon
+    "UCLsooMJoIpl_7ux2jvdPB-Q",  # Super Simple Songs
+    "UCcdwLMPsaU2ezNSJU1nFoBQ",  # Pinkfong
+    "UCKAqou7V9FAWXpZd9xtOg3Q",  # Little Baby Bum
+    "UCBnZ16ahKA2DZ_T5W0FPUXg",  # ChuChu TV
+]
+_YT_TRENDS = None
+
+
+def youtube_trends(max_items=15, days=60):
+    """Most-viewed recent uploads of top kids channels (titles + views) - inspiration only."""
+    global _YT_TRENDS
+    if _YT_TRENDS is not None:
+        return _YT_TRENDS
+    import xml.etree.ElementTree as ET
+    ns = {"a": "http://www.w3.org/2005/Atom", "m": "http://search.yahoo.com/mrss/"}
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    items = []
+    for cid in TREND_CHANNELS:
+        try:
+            req = urllib.request.Request(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}",
+                                         headers={"User-Agent": "Mozilla/5.0"})
+            root = ET.fromstring(urllib.request.urlopen(req, timeout=30).read())
+            for e in root.findall("a:entry", ns):
+                title = e.findtext("a:title", "", ns)
+                pub = datetime.datetime.fromisoformat(e.findtext("a:published", "", ns).replace("Z", "+00:00"))
+                st = e.find("m:group/m:community/m:statistics", ns)
+                views = int(st.get("views", 0)) if st is not None else 0
+                if pub >= cutoff:
+                    items.append((views, title))
+        except Exception as ex:  # noqa: BLE001
+            print("RSS failed for", cid, ex, flush=True)
+    items.sort(reverse=True)
+    lines = [f"- {t} ({v / 1e6:.1f}M views)" for v, t in items[:max_items]]
+    _YT_TRENDS = "Most-viewed recent kids videos:\n" + "\n".join(lines) if lines else ""
+    print(_YT_TRENDS, flush=True)
+    return _YT_TRENDS
+
+
 def gemini_trends(lang, key):
     """Ask Gemini (with Google Search) what kids' videos are going viral right now - patterns only."""
     L = LANG[lang]
@@ -788,7 +828,7 @@ def plan_episode(lang, fmt, ep, state):
         alpha = LANG[lang]["alphabet"]
         pos = state.setdefault("letter_pos", {}).get(lang, 0) % len(alpha)
         letters = alpha[pos:pos + 4] or alpha[:4]
-    trends = gemini_trends(lang, key) if key else ""
+    trends = youtube_trends()
     data = gemini_script(lang, fmt, ep, past, letters, key, trends) if key else None
     if not data:
         print(f"Using offline fallback script for {lang}")
@@ -814,8 +854,8 @@ def make_video(lang, fmt, ep, state, out_path):
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
-def _refresh_token():
-    raw = os.environ["YT_REFRESH_TOKEN"].strip()
+def _refresh_token(lang=None):
+    raw = (os.environ.get(f"YT_REFRESH_TOKEN_{(lang or '').upper()}") or os.environ["YT_REFRESH_TOKEN"]).strip()
     if raw.startswith("{"):
         raw = json.loads(raw)["refresh_token"].strip()
     return raw
@@ -826,7 +866,7 @@ def upload(path, title, description, tags, language, privacy="public", category_
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
-    creds = Credentials(token=None, refresh_token=_refresh_token(), client_id=os.environ["YT_CLIENT_ID"].strip(),
+    creds = Credentials(token=None, refresh_token=_refresh_token(language), client_id=os.environ["YT_CLIENT_ID"].strip(),
                         client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
                         token_uri="https://oauth2.googleapis.com/token", scopes=SCOPES)
     yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
