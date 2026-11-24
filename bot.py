@@ -43,7 +43,7 @@ CONFIG = {
     "height": 720,
     "fps": 24,
     "text_model": "gemini-2.5-flash",
-    "tts_models": ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"],
+    "tts_models": ["gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"],
     "tts_gap_seconds": 6,  # pause between TTS calls (free-tier rate limit)
 }
 
@@ -143,6 +143,13 @@ def list_models(key):
     return _MODELS
 
 
+def text_models(key):
+    bad = ("tts", "image", "lite", "live", "audio", "embedding", "thinking", "omni")
+    names = [n for n, m in list_models(key) if "generateContent" in m and "flash" in n and not any(x in n for x in bad)]
+    pref = ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest", "gemini-2.5-flash"]
+    return [n for n in pref if n in names] + [n for n in names if n not in pref] or [CONFIG["text_model"]]
+
+
 def pick_text_model(key):
     bad = ("tts", "image", "lite", "live", "audio", "embedding", "thinking")
     names = [n for n, m in list_models(key) if "generateContent" in m and "flash" in n and not any(x in n for x in bad)]
@@ -179,11 +186,10 @@ Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "caption": 
 "hide": bool, "reveal": bool, "intro": bool, "outro": bool}}]}}"""
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}
-    for attempt in range(3):
+    for attempt, model in enumerate(text_models(key)[:5]):
         try:
-            model = pick_text_model(key)
             print("Script model:", model, flush=True)
-            r = gemini_call(model, body, key)
+            r = gemini_call(model, body, key, timeout=300)
             data = json.loads(r["candidates"][0]["content"]["parts"][0]["text"])
             scenes = [s for s in data["scenes"] if s.get("say")]
             if len(scenes) >= 8:
@@ -278,18 +284,28 @@ def split_by_silence(a, sr, weights):
             j = i
             while j < len(quiet) and quiet[j]:
                 j += 1
-            if (j - i) * 0.02 >= 0.45 and i > 0 and j < len(quiet):
+            if (j - i) * 0.02 >= 0.3 and i > 0 and j < len(quiet):
                 gaps.append(((i + j) / 2 * hop, (j - i)))
             i = j
         else:
             i += 1
-    if len(gaps) < n - 1:
-        return None
     total = sum(weights)
     cum, targets = 0, []
     for w in weights[:-1]:
         cum += w
         targets.append(cum / total * len(a))
+    if len(gaps) < n - 1:
+        # not enough clear pauses: cut at the quietest moment near each expected boundary
+        cuts, prev = [], 0
+        win = int(len(rms) * 0.05)
+        for tg in targets:
+            c = int(tg / hop)
+            lo, hi = max(prev + 5, c - win), min(len(rms) - 5, c + win)
+            k = lo + int(np.argmin(rms[lo:hi])) if hi > lo else c
+            cuts.append(k * hop)
+            prev = k
+        edges = [0] + cuts + [len(a)]
+        return [a[x:y] for x, y in zip(edges[:-1], edges[1:])]
     # dynamic programming: pick n-1 gaps in order, minimise distance to targets, prefer long gaps
     G = len(gaps)
     INF = float("inf")
