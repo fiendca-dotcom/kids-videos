@@ -170,8 +170,8 @@ def probe_duration(path):
     return float(out.stdout.strip())
 
 
-def gemini_tts(text, lang, key, out_wav):
-    style = ("Read this aloud as a warm, playful, very cheerful host of a show for small children. "
+def gemini_tts(text, lang, key, out_wav, raw_prompt=False):
+    style = "" if raw_prompt else ("Read this aloud as a warm, playful, very cheerful host of a show for small children. "
              "Speak clearly, a little slowly, with lots of expression and smiles in your voice:\n")
     body = {"contents": [{"parts": [{"text": style + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {
@@ -180,7 +180,7 @@ def gemini_tts(text, lang, key, out_wav):
     for model in CONFIG["tts_models"]:
         for attempt in range(4):
             try:
-                r = gemini_call(model, body, key)
+                r = gemini_call(model, body, key, timeout=600)
                 part = r["candidates"][0]["content"]["parts"][0]["inlineData"]
                 pcm = base64.b64decode(part["data"])
                 raw = out_wav + ".pcm"
@@ -189,8 +189,10 @@ def gemini_tts(text, lang, key, out_wav):
                 return True
             except urllib.error.HTTPError as e:
                 last = f"{model} HTTP {e.code}"
-                if e.code in (429, 500, 503):
-                    time.sleep(20 * (attempt + 1))
+                body_txt = e.read().decode(errors="ignore")[:300]
+                print(f"TTS {model} HTTP {e.code}: {body_txt}", flush=True)
+                if e.code in (429, 500, 503) and "PerDay" not in body_txt:
+                    time.sleep(30 * (attempt + 1))
                     continue
                 break  # 404 etc. -> try next model
             except Exception as e:  # noqa: BLE001
@@ -218,37 +220,113 @@ def edge_tts_say(text, lang, out_wav):
     return False
 
 
+def gemini_tts_script(lines, lang, key, out_wav):
+    """ONE request for the whole episode (free-tier friendly)."""
+    style = ("You are the warm, playful, very cheerful host of a show for small children. Read the lines below aloud, "
+             "clearly and a little slowly, full of expression and smiles. After EACH line stay completely silent "
+             "for two full seconds before the next line. Do not read anything else.\n\n")
+    return gemini_tts(style + "\n\n".join(lines), lang, key, out_wav, raw_prompt=True)
+
+
+def split_by_silence(a, sr, weights):
+    """Cut one long narration into len(weights) parts at the best silent gaps."""
+    n = len(weights)
+    hop = int(0.02 * sr)
+    rms = np.array([np.sqrt(np.mean(a[i:i + hop] ** 2)) for i in range(0, len(a), hop)])
+    thr = max(0.008, np.percentile(rms, 30) * 1.5)
+    quiet = rms < thr
+    gaps, i = [], 0
+    while i < len(quiet):
+        if quiet[i]:
+            j = i
+            while j < len(quiet) and quiet[j]:
+                j += 1
+            if (j - i) * 0.02 >= 0.45 and i > 0 and j < len(quiet):
+                gaps.append(((i + j) / 2 * hop, (j - i)))
+            i = j
+        else:
+            i += 1
+    if len(gaps) < n - 1:
+        return None
+    total = sum(weights)
+    cum, targets = 0, []
+    for w in weights[:-1]:
+        cum += w
+        targets.append(cum / total * len(a))
+    # dynamic programming: pick n-1 gaps in order, minimise distance to targets, prefer long gaps
+    G = len(gaps)
+    INF = float("inf")
+    cost = [[INF] * G for _ in range(n - 1)]
+    back = [[-1] * G for _ in range(n - 1)]
+    for g in range(G):
+        cost[0][g] = abs(gaps[g][0] - targets[0]) / len(a) - gaps[g][1] * 0.002
+    for k in range(1, n - 1):
+        best, bi = INF, -1
+        for g in range(G):
+            if g - 1 >= 0 and cost[k - 1][g - 1] < best:
+                best, bi = cost[k - 1][g - 1], g - 1
+            if bi >= 0:
+                cost[k][g] = best + abs(gaps[g][0] - targets[k]) / len(a) - gaps[g][1] * 0.002
+                back[k][g] = bi
+    g = min(range(G), key=lambda x: cost[n - 2][x])
+    if cost[n - 2][g] == INF:
+        return None
+    cuts = []
+    for k in range(n - 2, -1, -1):
+        cuts.append(int(gaps[g][0]))
+        g = back[k][g]
+    cuts = sorted(cuts)
+    edges = [0] + cuts + [len(a)]
+    parts = []
+    for x, y in zip(edges[:-1], edges[1:]):
+        seg = a[x:y]
+        nz = np.where(np.abs(seg) > thr)[0]
+        parts.append(seg[max(0, nz[0] - hop):nz[-1] + hop] if len(nz) else seg[:hop])
+    return parts
+
+
+def write_wav(path, a, sr=44100):
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(a, -1, 1) * 32767).astype("<i2").tobytes())
+
+
 def synthesize(scenes, lang, tmp):
     key = os.environ.get("GEMINI_API_KEY", "").strip()
-    engine = "gemini" if key else "edge"
     try:
         import edge_tts  # noqa: F401
         have_edge = True
     except ImportError:
         have_edge = False
-    if engine == "edge" and not have_edge:
-        engine = "silent"
-    for attempt_engine in [engine, "edge", "silent"]:
-        if attempt_engine == "edge" and not have_edge:
-            continue
+    if key:
+        whole = os.path.join(tmp, "whole.wav")
+        if gemini_tts_script([s["say"] for s in scenes], lang, key, whole):
+            a = load_mono(whole)
+            parts = split_by_silence(a, 44100, [max(8, len(s["say"])) for s in scenes])
+            if parts:
+                for i, (sc, p) in enumerate(zip(scenes, parts)):
+                    sc["voice"] = os.path.join(tmp, f"v{i}.wav")
+                    write_wav(sc["voice"], p)
+                print("Voice engine: gemini (single request)", flush=True)
+                return "gemini"
+            print("Could not split Gemini narration cleanly - using fallback voice", flush=True)
+    for engine in (["edge"] if have_edge else []) + ["silent"]:
         ok = True
         for i, sc in enumerate(scenes):
             path = os.path.join(tmp, f"v{i}.wav")
-            if attempt_engine == "gemini":
-                ok = gemini_tts(sc["say"], lang, key, path)
-                time.sleep(CONFIG["tts_gap_seconds"])
-            elif attempt_engine == "edge":
+            if engine == "edge":
                 ok = edge_tts_say(sc["say"], lang, path)
             else:
                 dur = 0.42 * len(sc["say"].split()) + 0.6
                 run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", f"{dur:.2f}", path])
             if not ok:
-                print(f"{attempt_engine} failed at scene {i}; switching engine for the whole video")
                 break
             sc["voice"] = path
         if ok:
-            print("Voice engine:", attempt_engine)
-            return attempt_engine
+            print("Voice engine:", engine, flush=True)
+            return engine
     raise RuntimeError("no speech engine worked")
 
 
