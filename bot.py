@@ -167,12 +167,35 @@ def pick_tts_models(key):
     return ordered or CONFIG["tts_models"]
 
 
-def gemini_script(lang, fmt, ep, past_titles, letters, key):
+def gemini_trends(lang, key):
+    """Ask Gemini (with Google Search) what kids' videos are going viral right now - patterns only."""
+    L = LANG[lang]
+    prompt = (f"Use Google Search to find which YouTube videos for children aged 2-6 are getting the most views in the "
+              f"last 30 days, especially in {L['name']} and worldwide (look at top channels, viral titles and topics). "
+              "Summarise in at most 8 short bullet points the PATTERNS that make them popular: topics, formats "
+              "(songs, daily routines, stories, games, animals, colors...), hooks in the first seconds, title styles. "
+              "Do not list copyrighted lyrics. Answer in English, max 1200 characters.")
+    body = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
+    for model in text_models(key)[:3]:
+        try:
+            r = gemini_call(model, body, key, timeout=240)
+            txt = "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"])[:1500]
+            if txt.strip():
+                print(f"Trends ({lang}, {model}):\n{txt}", flush=True)
+                return txt
+        except Exception as e:  # noqa: BLE001
+            print("Trend research failed:", model, e, flush=True)
+    return ""
+
+
+def gemini_script(lang, fmt, ep, past_titles, letters, key, trends=""):
     L = LANG[lang]
     rules = FORMAT_RULES[fmt].format(m=L["mascot"], letters=" ".join(letters))
     prompt = f"""You write scripts for a YouTube channel for children aged 2-6. Host: {L['mascot']}, a friendly, curious owl.
 Write episode {ep} in {L['name']} only (all text fields in {L['name']}, natural for native speakers, very simple words).
 Format: {rules}
+What is going viral with young kids right now (inspiration only): {trends or "n/a"}
+Use those patterns (topics, hooks, energy, title style) so the episode feels current and catchy, and you may adapt the format toward them - but everything must be 100% ORIGINAL: never copy or mention existing characters, channels, brands, song lyrics or video titles.
 Rules:
 - First scene: intro (intro=true): {L['mascot']} greets the kids warmly and says what we'll do today.
 - Last scene: outro (outro=true): praise the kids and say goodbye until next time. Do NOT ask to like or subscribe.
@@ -765,7 +788,8 @@ def plan_episode(lang, fmt, ep, state):
         alpha = LANG[lang]["alphabet"]
         pos = state.setdefault("letter_pos", {}).get(lang, 0) % len(alpha)
         letters = alpha[pos:pos + 4] or alpha[:4]
-    data = gemini_script(lang, fmt, ep, past, letters, key) if key else None
+    trends = gemini_trends(lang, key) if key else ""
+    data = gemini_script(lang, fmt, ep, past, letters, key, trends) if key else None
     if not data:
         print(f"Using offline fallback script for {lang}")
         data = fallback_episode(lang)
