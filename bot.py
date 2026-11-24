@@ -39,6 +39,7 @@ CONFIG = {
     "formats": ["animals", "letters", "riddles", "story"],
     "privacy": "public",
     "voice": "edge",  # "edge" (Microsoft, free) or "gemini"
+    "minimax_langs": ["en", "ar", "he"],  # used only when MINIMAX_API_KEY secret exists; else free voice
     "category_id": "27",
     "width": 1280,
     "height": 720,
@@ -327,6 +328,45 @@ def edge_tts_say(text, lang, out_wav):
     return False
 
 
+MINIMAX_BOOST = {"en": "English", "ar": "Arabic", "he": "Hebrew"}
+MINIMAX_VOICES = ["English_radiant_girl", "Lively_Girl", "English_expressive_narrator"]
+
+
+def minimax_say(text, lang, out_wav, key, state):
+    """MiniMax T2A v2. Returns True on success; sets state['dead'] on auth/quota errors."""
+    import urllib.request
+    import urllib.error
+    models = ["speech-2.8-hd", "speech-2.6-hd"]
+    voices = ([state["voice"]] if state.get("voice") else MINIMAX_VOICES)
+    for model in ([state["model"]] if state.get("model") else models):
+        for voice in voices:
+            body = {"model": model, "text": text, "stream": False, "output_format": "hex",
+                    "language_boost": MINIMAX_BOOST.get(lang, "auto"),
+                    "voice_setting": {"voice_id": voice, "speed": 0.92, "vol": 1, "pitch": 1, "emotion": "happy"},
+                    "audio_setting": {"sample_rate": 44100, "bitrate": 128000, "format": "mp3", "channel": 1}}
+            req = urllib.request.Request("https://api.minimax.io/v1/t2a_v2", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+            try:
+                res = json.load(urllib.request.urlopen(req, timeout=120))
+            except Exception as e:  # noqa: BLE001
+                print("MiniMax error:", model, voice, str(e)[:120], flush=True)
+                continue
+            code = (res.get("base_resp") or {}).get("status_code")
+            if code == 0 and (res.get("data") or {}).get("audio"):
+                mp3 = out_wav + ".mp3"
+                with open(mp3, "wb") as f:
+                    f.write(bytes.fromhex(res["data"]["audio"]))
+                run(["ffmpeg", "-y", "-i", mp3, out_wav])
+                state["model"], state["voice"] = model, voice
+                return True
+            msg = (res.get("base_resp") or {}).get("status_msg", "")
+            print("MiniMax failed:", model, voice, code, msg[:120], flush=True)
+            if code in (1004, 1008, 2049):  # auth failure / insufficient balance / invalid key
+                state["dead"] = True
+                return False
+    return False
+
+
 def gemini_tts_script(lines, lang, key, out_wav):
     """ONE request for the whole episode (free-tier friendly)."""
     style = ("You are the warm, playful, very cheerful host of a show for small children. Read the lines below aloud, "
@@ -429,6 +469,21 @@ def synthesize(scenes, lang, tmp):
                 print("Voice engine: gemini (single request)", flush=True)
                 return "gemini"
             print("Could not split Gemini narration cleanly - using fallback voice", flush=True)
+    mm_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+    if mm_key and lang in CONFIG.get("minimax_langs", []):
+        state = {}
+        paths = []
+        for i, sc in enumerate(scenes):
+            path = os.path.join(tmp, f"v{i}.wav")
+            if not minimax_say(sc["say"], lang, path, mm_key, state):
+                break
+            paths.append(path)
+        if len(paths) == len(scenes):
+            for sc, p in zip(scenes, paths):
+                sc["voice"] = p
+            print("Voice engine: minimax", state.get("model"), state.get("voice"), flush=True)
+            return "minimax"
+        print("MiniMax unavailable - falling back to free voice", flush=True)
     for engine in (["edge"] if have_edge else []) + ["silent"]:
         ok = True
         for i, sc in enumerate(scenes):
