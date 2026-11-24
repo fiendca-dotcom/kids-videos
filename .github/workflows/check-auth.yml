@@ -1,0 +1,32 @@
+name: check-auth
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check YouTube tokens
+        env:
+          CID: ${{ secrets.YT_CLIENT_ID }}
+          CSEC: ${{ secrets.YT_CLIENT_SECRET }}
+          T_DEFAULT: ${{ secrets.YT_REFRESH_TOKEN }}
+          T_EN: ${{ secrets.YT_REFRESH_TOKEN_EN }}
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request, urllib.parse
+          for name in ["T_DEFAULT", "T_EN"]:
+              raw = (os.environ.get(name) or "").strip()
+              if not raw:
+                  print(name, "-> missing"); continue
+              if raw.startswith("{"):
+                  raw = json.loads(raw)["refresh_token"].strip()
+              data = urllib.parse.urlencode({"client_id": os.environ["CID"].strip(), "client_secret": os.environ["CSEC"].strip(),
+                                             "refresh_token": raw, "grant_type": "refresh_token"}).encode()
+              try:
+                  at = json.load(urllib.request.urlopen("https://oauth2.googleapis.com/token", data))["access_token"]
+                  req = urllib.request.Request("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+                                               headers={"Authorization": "Bearer " + at})
+                  items = json.load(urllib.request.urlopen(req)).get("items", [])
+                  print(name, "-> OK:", [i["snippet"]["title"] for i in items])
+              except urllib.error.HTTPError as e:
+                  print(name, "-> FAILED:", e.code, e.read().decode()[:200])
+          PY
