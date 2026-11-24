@@ -1,0 +1,27 @@
+{
+ "title": "30 Days From Bankruptcy: The Bold Move That Saved Nvidia",
+ "scenes": [
+  {"img": "N01", "say": "Today, it is one of the most valuable companies on Earth. Its chips power video games, self-driving cars and artificial intelligence. But in 1996, this company was just thirty days away from disappearing forever."},
+  {"img": "N02", "say": "This is the story of Nvidia. And of the one bold move that saved it."},
+  {"img": "N03", "say": "It begins in 1993. Three engineers meet at a roadside diner in California. Their idea: build special chips that could bring real 3D graphics to personal computers. A tiny startup is born."},
+  {"img": "N04", "say": "Their first chip is called the NV1. And it makes a bold technical bet. While the rest of the industry builds 3D images out of triangles, the NV1 draws its worlds with curved, four-sided shapes instead."},
+  {"img": "N05", "say": "On paper, it is elegant. In the real world, it is a problem. Game developers want triangles. Microsoft's new DirectX standard is built on triangles. And the NV1 does not fit."},
+  {"img": "N06", "say": "The chip fails in the market. Sales never take off. And the young company starts burning through its money."},
+  {"img": "N07", "say": "But there is still one lifeline: a contract with Sega, the giant Japanese video game company, to build the graphics chip for its next game console."},
+  {"img": "N08", "say": "And then comes the painful realization. The console chip is being built on the same wrong technology. If they finish it, they fall years behind everyone else. If they stop, the money stops too."},
+  {"img": "N09", "say": "As the company's CEO, Jensen Huang, would later put it: either way, they would be out of business. By now, Nvidia has roughly thirty days of cash left."},
+  {"img": "N10", "say": "So Jensen makes a decision that most founders would never dare to make. He gets on a plane to Japan, to tell his biggest customer the truth, face to face."},
+  {"img": "N11", "say": "He meets Sega's leader, Shoichiro Irimajiri, and admits it all. Our technology is the wrong choice, he says. You should use a competitor. But if Sega does not pay, Nvidia will go under."},
+  {"img": "N12", "say": "It is a huge risk. Sega owes them nothing. They could walk away. They could even sue. Irimajiri takes a few days to think it over."},
+  {"img": "N13", "say": "And then, he says yes. Sega turns the money into a five million dollar investment in Nvidia. Not because it has to. Because someone told the truth, and someone else chose to trust it."},
+  {"img": "N14", "say": "Five million dollars buys Nvidia about six months of life. Now every decision counts. The company lets go of about half of its roughly one hundred employees, and bets everything on one new chip."},
+  {"img": "N15", "say": "This time, they do not fight the industry. They build exactly what the market needs: a fast chip that speaks triangles and DirectX. They call it the RIVA 128."},
+  {"img": "N16", "say": "The pressure is enormous. By the time the RIVA 128 launches in August 1997, Nvidia is down to about one month of payroll. There is no plan B."},
+  {"img": "N17", "say": "And it works. Gamers love it. Computer makers want it. The RIVA 128 sells around one million units in its first four months. Nvidia is alive."},
+  {"img": "N18", "say": "But they never forget how close they came. For years, Jensen would open company meetings with the same words: our company is thirty days from going out of business."},
+  {"img": "N19", "say": "In January 1999, Nvidia goes public. That same year it introduces what it calls the world's first GPU, the chip that would later power the AI revolution."},
+  {"img": "N20", "say": "And Sega? It later sold its stake for around fifteen million dollars. A stake that, held until today, would have been worth a fortune."},
+  {"img": "N21", "say": "So what made the difference? Not a perfect plan. Not luck. It was one bold move: admitting the mistake, telling the truth when it was scary, and betting everything on getting it right next time."},
+  {"img": "N22", "say": "Maybe you are thirty days from your own turning point. What is the one bold move you are avoiding? Make it today. And subscribe to One Bold Move for more stories like this."}
+ ]
+}
