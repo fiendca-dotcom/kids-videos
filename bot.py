@@ -35,7 +35,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 
 CONFIG = {
-    "languages": ["he", "ar", "en"],
+    "languages": ["en"],  # he/ar paused until their channels exist
     "formats": ["animals", "letters", "riddles", "story"],
     "privacy": "public",
     "voice": "edge",  # "edge" (Microsoft, free) or "gemini"
