@@ -1,8 +1,7 @@
 name: Publish kids video
 on:
-  # schedule paused - re-enable after approval:
-  # schedule:
-  #   - cron: "0 14 * * 0,2,4"
+  schedule:
+    - cron: "0 14 * * 0,2,4"
   workflow_dispatch:
     inputs:
       test:
