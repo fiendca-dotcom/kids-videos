@@ -21,7 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji libraqm0
-      - run: pip install Pillow numpy scipy edge-tts google-api-python-client google-auth
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-dreamshaper8-lcm-v1
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install Pillow numpy scipy edge-tts google-api-python-client google-auth diffusers transformers accelerate peft safetensors
       - if: ${{ github.event_name == 'workflow_dispatch' && inputs.test }}
         run: |
           python bot.py --dry-run
