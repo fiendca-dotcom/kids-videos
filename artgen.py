@@ -12,6 +12,18 @@ import time
 
 MODEL = os.environ.get("ART_MODEL", "Lykon/dreamshaper-8")
 LORA = os.environ.get("ART_LORA", "latent-consistency/lcm-lora-sdv1-5")
+XL_MODEL = os.environ.get("ART_XL_MODEL", "Lykon/dreamshaper-xl-lightning")
+
+
+def big_machine():
+    """SDXL needs ~11 GB RAM; public-repo GitHub runners have 16 GB and 4 CPUs."""
+    if os.environ.get("ART_XL") != "1":  # SDXL is ~10 min/image on CPU: nightly library only
+        return False
+    try:
+        mem = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
+    except (ValueError, OSError, AttributeError):
+        mem = 0
+    return mem >= 14 and (os.cpu_count() or 1) >= 4
 STYLE = "cute 3d cartoon, pixar style, picture book art, adorable, soft warm light, pastel colours, fluffy, detailed"
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
@@ -34,8 +46,30 @@ def available():
         return False
 
 
+XL = False
+
+
 def pipe():
-    global _P
+    global _P, XL
+    if _P is None and big_machine():
+        try:
+            import torch
+            from diffusers import DPMSolverMultistepScheduler, StableDiffusionXLPipeline
+            torch.set_num_threads(os.cpu_count() or 4)
+            t0 = time.time()
+            kw = dict(torch_dtype=torch.float32)
+            try:
+                p = StableDiffusionXLPipeline.from_pretrained(XL_MODEL, variant="fp16", **kw)
+            except Exception:  # noqa: BLE001
+                p = StableDiffusionXLPipeline.from_pretrained(XL_MODEL, **kw)
+            p.scheduler = DPMSolverMultistepScheduler.from_config(
+                p.scheduler.config, algorithm_type="sde-dpmsolver++", use_karras_sigmas=True)
+            p.set_progress_bar_config(disable=True)
+            _P, XL = p, True
+            log(f"Local art model ready in {time.time() - t0:.0f}s ({XL_MODEL}, SDXL, {os.cpu_count()} CPUs)")
+        except Exception as e:  # noqa: BLE001
+            log("SDXL not available, using SD 1.5:", str(e)[:200])
+            _P = None
     if _P is None:
         import torch
         from diffusers import LCMScheduler, StableDiffusionPipeline
@@ -60,6 +94,11 @@ def generate(prompt, w, h, seed, steps=4, guidance=1.3):
     p = pipe()
     g = torch.Generator("cpu").manual_seed(int(seed) % (2 ** 31))
     with torch.inference_mode():
+        if XL:  # SDXL works natively around 1 megapixel
+            k = (1024 * 1024 / (w * h)) ** 0.5
+            W, H = int(w * k) // 64 * 64, int(h * k) // 64 * 64
+            return p(prompt=prompt, negative_prompt=NEG, width=W, height=H, num_inference_steps=5,
+                     guidance_scale=2.0, generator=g).images[0]
         return p(prompt=prompt, negative_prompt=NEG, width=w, height=h, num_inference_steps=steps,
                  guidance_scale=guidance, generator=g).images[0]
 
