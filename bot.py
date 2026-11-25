@@ -787,6 +787,43 @@ class Owl:
             d.ellipse([cx + fx * s - 16 * s, cy + 90 * s, cx + fx * s + 16 * s, cy + 104 * s], fill=(255, 170, 40))
 
 
+class NuniSprite:
+    """Nuni from the picture books (assets/nuni_idle|talk|happy.png).
+    Used automatically when the three images exist; otherwise the code-drawn Owl is used."""
+
+    @staticmethod
+    def load():
+        p = ROOT / "assets"
+        names = {"idle": "nuni_idle.png", "talk": "nuni_talk.png", "happy": "nuni_happy.png"}
+        if not all((p / n).exists() for n in names.values()):
+            print("Mascot: code-drawn owl (assets/nuni_*.png not found)")
+            return None
+        o = NuniSprite()
+        o.src = {k: Image.open(p / n).convert("RGBA") for k, n in names.items()}
+        o.cache = {}
+        print("Mascot: Nuni book sprites")
+        return o
+
+    def _get(self, key, h):
+        h = max(8, int(h) // 4 * 4)
+        k = (key, h)
+        if k not in self.cache:
+            im = self.src[key]
+            self.cache[k] = im.resize((max(1, int(im.width * h / im.height)), h), Image.LANCZOS)
+        return self.cache[k]
+
+    def draw(self, img, cx, cy, s, t, mouth, wave=0.0):
+        talking = mouth > 0.18 and int(t * 8) % 2 == 0
+        if wave > 0:
+            key = "talk" if talking else "happy"
+        else:
+            key = "talk" if talking else "idle"
+        h = 270 * s
+        bob = math.sin(t * 3) * 5 * s
+        sp = self._get(key, h)
+        img.paste(sp, (int(cx - sp.width / 2), int(cy + 104 * s - sp.height + bob)), sp)
+
+
 # ----------------------------------------------------------------- render
 @dataclass
 class Scene:
@@ -842,7 +879,7 @@ def render_video(episode, lang, out_path, seed, tmp):
 
     art = Art(W, H, lang)
     bgs = Backgrounds(W, H, seed)
-    owl = Owl()
+    owl = NuniSprite.load() or Owl()
     silent = os.path.join(tmp, "video.mp4")
     ff = subprocess.Popen(["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps),
                            "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", silent],
