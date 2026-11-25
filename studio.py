@@ -202,7 +202,25 @@ class ArtLib:
         self.t0 = time.time()
         self.budget = budget_s
         self.last = 0.0
-        self.stats = {"cache": 0, "gemini": 0, "pollinations": 0, "none": 0}
+        self.stats = {"cache": 0, "local": 0, "gemini": 0, "pollinations": 0, "none": 0}
+        try:
+            import artgen
+            self.artgen = artgen if artgen.available() else None
+        except Exception:  # noqa: BLE001
+            self.artgen = None
+        log("Local picture generator:", "on" if self.artgen else "off")
+
+    def _local(self, prompt, w, h, seed):
+        if self.artgen is None or self.left() < 60:
+            return None
+        try:
+            im = self.artgen.generate(prompt, w, h, seed)
+            self.stats["local"] += 1
+            return im
+        except Exception as e:  # noqa: BLE001
+            log("  local art failed:", str(e)[:200])
+            self.artgen = None
+            return None
 
     def left(self):
         return self.budget - (time.time() - self.t0)
@@ -297,7 +315,11 @@ class ArtLib:
             return Image.open(path).convert("RGB")
         prompt = (f"{STYLE}. Wide landscape background scene: {place}. Scenery only - no animals, no people, no "
                   "characters, no text or letters. Keep the centre and lower part open and uncluttered.")
-        im, src = self._make(prompt, "16:9", 1344, 768, abs(hash(place)) % 100000)
+        seed = sum(map(ord, place)) * 31
+        im = self._local(self.artgen.bg_prompt(place), 912, 512, seed) if self.artgen else None
+        src = "local"
+        if im is None:
+            im, src = self._make(prompt, "16:9", 1344, 768, seed)
         if im is None:
             self.stats["none"] += 1
             return None
@@ -313,8 +335,12 @@ class ArtLib:
             return Image.open(path).convert("RGBA")
         prompt = (f"{STYLE}. One single {name}, cute and friendly, the whole thing fully visible and centred, "
                   "isolated on a plain pure white background. No shadow, no ground, no frame, no text, nothing else.")
-        for attempt in range(2):
-            im, src = self._make(prompt, "1:1", 768, 768, abs(hash(name)) % 100000 + attempt)
+        for attempt in range(3):
+            seed = sum(map(ord, name)) * 17 + attempt * 101
+            im = self._local(self.artgen.item_prompt(name), 512, 512, seed) if self.artgen else None
+            src = "local"
+            if im is None:
+                im, src = self._make(prompt, "1:1", 768, 768, seed)
             if im is None:
                 break
             cut = cutout(im)
@@ -1052,8 +1078,29 @@ def scene_kind(sd):
     return "normal"
 
 
+BANNED = re.compile(r"\b(pig|pigs|piglet|piglets|hog|hogs|swine|boar|sow)\b", re.I)
+BANNED_EMOJI = ("🐷", "🐖", "🐽", "🐗")
+
+
+def banned(sd):
+    txt = " ".join([sd.get("say", ""), sd.get("caption", "")] + [a for a in (sd.get("art") or []) if isinstance(a, str)])
+    return bool(BANNED.search(txt)) or any(e in BANNED_EMOJI for e in (sd.get("show") or []))
+
+
 def plan(episode, lang):
-    raw = episode["scenes"]
+    raw = list(episode["scenes"])
+    drop = set()
+    for i, sd in enumerate(raw):
+        if banned(sd) and not (sd.get("intro") or sd.get("outro")):
+            drop.add(i)
+            if sd.get("reveal") and i > 0 and raw[i - 1].get("hide"):
+                drop.add(i - 1)
+            if sd.get("hide") and i + 1 < len(raw) and raw[i + 1].get("reveal"):
+                drop.add(i + 1)
+    if drop:
+        log(f"Removed {len(drop)} scene(s) with banned subjects")
+    raw = [sd for i, sd in enumerate(raw) if i not in drop]
+    episode["scenes"] = raw
     out = []
     prev_place = None
     for i, sd in enumerate(raw):
@@ -1112,6 +1159,8 @@ def fetch_art(scenes, lib, max_bg=10, max_items=26):
     for nm in order[12:]:
         items[nm] = lib.item(nm)
     log("Art:", json.dumps(lib.stats))
+    if lib.artgen is not None:
+        lib.artgen.release()
     return bgs, items
 
 
