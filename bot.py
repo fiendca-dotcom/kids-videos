@@ -45,7 +45,7 @@ CONFIG = {
     "height": 720,
     "fps": 24,
     "renderer": "studio",
-    "shorts_upload": False,  # True = also upload the automatic ~55 s vertical Short of every episode  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
+    "shorts_upload": True,  # True = also upload the automatic ~55 s vertical Short of every episode  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
     "art_budget_s": 1500,  # max seconds per video spent creating new pictures (they are cached in assets/lib)
     "text_model": "gemini-2.5-flash",
     "tts_models": ["gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"],
