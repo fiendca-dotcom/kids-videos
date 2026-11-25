@@ -12,8 +12,7 @@ import time
 
 MODEL = os.environ.get("ART_MODEL", "Lykon/dreamshaper-8")
 LORA = os.environ.get("ART_LORA", "latent-consistency/lcm-lora-sdv1-5")
-STYLE = ("cute 3d cartoon render, pixar style, children's picture book illustration, adorable, big round expressive eyes, "
-         "soft warm golden sunlight, gentle pastel colours, fluffy soft textures, rounded shapes, highly detailed, masterpiece")
+STYLE = "cute 3d cartoon, pixar style, picture book art, adorable, soft warm light, pastel colours, fluffy, detailed"
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
        "weapon, photo, photorealistic, pig, piglet")
@@ -51,16 +50,12 @@ def pipe():
         p.load_lora_weights(LORA)
         p.fuse_lora()
         p.set_progress_bar_config(disable=True)
-        try:
-            p.enable_attention_slicing()
-        except Exception:  # noqa: BLE001
-            pass
         _P = p
         log(f"Local art model ready in {time.time() - t0:.0f}s ({MODEL} + LCM, {os.cpu_count()} CPUs)")
     return _P
 
 
-def generate(prompt, w, h, seed, steps=6, guidance=1.5):
+def generate(prompt, w, h, seed, steps=4, guidance=1.3):
     import torch
     p = pipe()
     g = torch.Generator("cpu").manual_seed(int(seed) % (2 ** 31))
@@ -70,13 +65,11 @@ def generate(prompt, w, h, seed, steps=6, guidance=1.5):
 
 
 def item_prompt(name):
-    return (f"{STYLE}, one single cute {name}, the whole {name} fully visible, centered, standing alone, "
-            "isolated on a plain pure white background, clean white backdrop, studio shot")
+    return f"one cute {name}, {STYLE}, full body, centered, isolated on plain white background"
 
 
 def bg_prompt(place):
-    return (f"{STYLE}, wide landscape background of {place}, beautiful scenery, empty scene with no animals, no people, "
-            "no characters, soft depth of field, storybook environment art")
+    return f"{place}, wide landscape, {STYLE}, empty scenery, no animals, no people, storybook background"
 
 
 def release():
@@ -91,9 +84,8 @@ def demo(out="out/art_demo"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import studio
     os.makedirs(out, exist_ok=True)
-    items = ["baby cow", "yellow duckling with a blue bow", "green frog", "snowman", "ripe banana", "red toy train",
-             "fluffy white sheep", "baby elephant"]
-    places = ["sunny farm meadow with a red barn", "snowy winter forest", "pond with water lilies"]
+    items = ["cow", "duckling", "snowman", "banana", "red toy train"]
+    places = ["sunny farm meadow with a red barn", "snowy winter forest"]
     tiles = []
     for i, nm in enumerate(items):
         t0 = time.time()
