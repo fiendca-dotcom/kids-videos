@@ -98,10 +98,52 @@ def cover(img, w, h):
     return im.crop((x, y, x + w, y + h))
 
 
+def cutout_grab(img):
+    """Object on a plain studio backdrop (white or grey gradient) -> RGBA, using OpenCV GrabCut."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    im = img.convert("RGB")
+    im.thumbnail((768, 768), Image.LANCZOS)
+    a = np.asarray(im)
+    h, w = a.shape[:2]
+    m = int(min(w, h) * 0.025)
+    mask = np.zeros((h, w), np.uint8)
+    bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+    cv2.grabCut(a[..., ::-1].copy(), mask, (m, m, w - 2 * m, h - 2 * m), bgd, fgd, 6, cv2.GC_INIT_WITH_RECT)
+    fg = (mask == 1) | (mask == 3)
+    # drop grey cast shadows / glows: unsaturated pixels close to the backdrop tone
+    ai = a.astype(np.int16)
+    edge = np.concatenate([ai[:4].reshape(-1, 3), ai[-4:].reshape(-1, 3), ai[:, :4].reshape(-1, 3), ai[:, -4:].reshape(-1, 3)])
+    ref_v = float(np.median(edge.max(1)))
+    sat = ai.max(2) - ai.min(2)
+    val = ai.max(2)
+    greyish = (sat < 22) & (val < ref_v + 18) & (val > ref_v - 90)
+    fg = fg & ~greyish
+    fg = ndimage.binary_opening(fg, iterations=1)
+    lab, n = ndimage.label(fg)
+    if n == 0:
+        return None
+    sizes = ndimage.sum(fg, lab, range(1, n + 1))
+    fg = np.isin(lab, 1 + np.where(sizes >= sizes.max() * 0.08)[0])
+    fg = ndimage.binary_fill_holes(ndimage.binary_opening(fg, iterations=2))
+    frac = fg.mean()
+    if frac < 0.04 or frac > 0.85:
+        return None
+    alpha = ndimage.gaussian_filter(fg.astype(np.float32), 0.8)
+    res = Image.fromarray(np.dstack([a, (np.clip(alpha, 0, 1) * 255).astype(np.uint8)]), "RGBA")
+    bb = res.getbbox()
+    return res.crop(bb) if bb else None
+
+
 def cutout(img):
     """Object painted on a white background -> RGBA cut-out (None if it does not look clean)."""
     if ndimage is None:
         return None
+    g = cutout_grab(img)
+    if g is not None:
+        return g
     im = img.convert("RGB")
     im.thumbnail((900, 900), Image.LANCZOS)
     a = np.asarray(im).astype(np.int16)
@@ -328,6 +370,11 @@ class ArtLib:
         seed = sum(map(ord, place)) * 31
         im = self._local(self.artgen.bg_prompt(place), 912, 512, seed) if self.artgen else None
         src = "local"
+        if im is not None:
+            from PIL import ImageEnhance, ImageFilter
+            im = ImageEnhance.Color(im.filter(ImageFilter.GaussianBlur(1.2))).enhance(1.12)
+            warm = Image.new("RGB", im.size, (255, 214, 160))
+            im = Image.blend(im, warm, 0.08)
         if im is None:
             im, src = self._make(prompt, "16:9", 1344, 768, seed)
         if im is None:
