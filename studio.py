@@ -106,7 +106,13 @@ def cutout(img):
     im.thumbnail((900, 900), Image.LANCZOS)
     a = np.asarray(im).astype(np.int16)
     mn, mx = a.min(2), a.max(2)
-    bgish = (mn > 226) & ((mx - mn) < 24)
+    edge = np.concatenate([a[:6].reshape(-1, 3), a[-6:].reshape(-1, 3), a[:, :6].reshape(-1, 3), a[:, -6:].reshape(-1, 3)])
+    ref = np.median(edge, axis=0)
+    if ref.min() > 200 and ref.max() - ref.min() < 40:  # light, plain backdrop (white / off-white / pale grey)
+        dist = np.abs(a - ref[None, None, :]).sum(2)
+        bgish = ((mn > 226) & ((mx - mn) < 24)) | (dist < 42)
+    else:
+        bgish = (mn > 226) & ((mx - mn) < 24)
     lab, n = ndimage.label(bgish)
     border = np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))
     bg = np.isin(lab, border[border > 0])
@@ -308,11 +314,15 @@ class ArtLib:
             return p, "pollinations"
         return None, None
 
-    def background(self, place):
+    def background(self, place, exact=False):
         path = self.dir / "bg" / f"{slug(place)}.jpg"
         if path.exists():
             self.stats["cache"] += 1
             return Image.open(path).convert("RGB")
+        fuzzy = None if exact else self.find_bg(place)
+        if fuzzy is not None and (self.artgen is None or self.left() < 400):
+            self.stats["cache"] += 1
+            return Image.open(fuzzy).convert("RGB")
         prompt = (f"{STYLE}. Wide landscape background scene: {place}. Scenery only - no animals, no people, no "
                   "characters, no text or letters. Keep the centre and lower part open and uncluttered.")
         seed = sum(map(ord, place)) * 31
@@ -321,6 +331,9 @@ class ArtLib:
         if im is None:
             im, src = self._make(prompt, "16:9", 1344, 768, seed)
         if im is None:
+            if fuzzy is not None:
+                self.stats["cache"] += 1
+                return Image.open(fuzzy).convert("RGB")
             self.stats["none"] += 1
             return None
         im = cover(im, BGW, BGH)
@@ -328,14 +341,45 @@ class ArtLib:
         log(f"  + background '{place}' ({src})")
         return im
 
-    def item(self, name):
+    def find_item(self, name):
+        """Library picture for this name: exact, or a stored subject whose words are all in the name."""
+        path = self.dir / "items" / f"{slug(name)}.webp"
+        if path.exists():
+            return path
+        words = set(slug(name).split("-"))
+        best = None
+        for f in (self.dir / "items").glob("*.webp"):
+            kw = set(f.stem.split("-"))
+            if kw and kw <= words and (best is None or len(kw) > len(set(best.stem.split("-")))):
+                best = f
+        return best
+
+    def find_bg(self, place):
+        path = self.dir / "bg" / f"{slug(place)}.jpg"
+        if path.exists():
+            return path
+        stop = {"a", "an", "the", "with", "and", "of", "in", "on", "by", "at", "to", "big", "little", "sunny", "green"}
+        words = set(slug(place).split("-")) - stop
+        best, score = None, 0
+        for f in (self.dir / "bg").glob("*.jpg"):
+            kw = set(f.stem.split("-")) - stop
+            sc = len(kw & words)
+            if sc > score or (sc == score and best is not None and len(kw) < len(set(best.stem.split("-")))):
+                best, score = f, sc
+        return best if score >= 2 else None
+
+    def item(self, name, exact=False):
         path = self.dir / "items" / f"{slug(name)}.webp"
         if path.exists():
             self.stats["cache"] += 1
             return Image.open(path).convert("RGBA")
+        fuzzy = None if exact else self.find_item(name)
+        if fuzzy is not None and (self.artgen is None or self.left() < 300):
+            self.stats["cache"] += 1
+            return Image.open(fuzzy).convert("RGBA")
         prompt = (f"{STYLE}. One single {name}, cute and friendly, the whole thing fully visible and centred, "
                   "isolated on a plain pure white background. No shadow, no ground, no frame, no text, nothing else.")
-        for attempt in range(3):
+        for attempt in range(2):
             seed = sum(map(ord, name)) * 17 + attempt * 101
             im = self._local(self.artgen.item_prompt(name), 512, 512, seed) if self.artgen else None
             src = "local"
@@ -350,8 +394,18 @@ class ArtLib:
                 log(f"  + item '{name}' ({src})")
                 return cut
             log(f"  item '{name}': background not clean, retrying")
+        if fuzzy is not None:
+            self.stats["cache"] += 1
+            return Image.open(fuzzy).convert("RGBA")
         self.stats["none"] += 1
         return None
+
+
+def library_names(root):
+    d = Path(root) / "assets" / "lib"
+    items = sorted(f.stem.replace("-", " ") for f in (d / "items").glob("*.webp"))
+    places = sorted(f.stem.replace("-", " ") for f in (d / "bg").glob("*.jpg"))
+    return items, places
 
 
 # ======================================================================= procedural fallback backgrounds
