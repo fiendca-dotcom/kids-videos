@@ -252,7 +252,7 @@ Rules:
 - 'place' = where the scene happens, in ENGLISH, for the illustrator (e.g. "sunny farm meadow with a red barn"). Keep the same place for several scenes in a row; use 4-7 different places in the episode, matching the topic.
 - 'art' = for each emoji in 'show', a short ENGLISH name of the thing to paint, same order (e.g. "ripe yellow banana", "baby elephant").
 - 'clues' = only in hide=true scenes: one emoji per clue, in the order the clues are said (e.g. ["💛", "🐒"]); else [].
-- Total 22-36 scenes. Safe, kind, no scary or violent content, no brands or known characters.
+- Total 22-36 scenes. NEVER include pigs, piglets or hogs (no pig words, no pig emoji). Safe, kind, no scary or violent content, no brands or known characters.
 - Make it different from these past episodes: {past_titles[-12:]}
 - 'title' = catchy YouTube title in {L['name']} (max 70 chars) that mentions {L['mascot']}.
 - 'description' = 2-3 warm sentences for parents (in {L['name']}) for the YouTube description, naturally using search keywords.
