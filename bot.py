@@ -44,6 +44,8 @@ CONFIG = {
     "width": 1280,
     "height": 720,
     "fps": 24,
+    "renderer": "studio",  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
+    "art_budget_s": 1500,  # max seconds per video spent creating new pictures (they are cached in assets/lib)
     "text_model": "gemini-2.5-flash",
     "tts_models": ["gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"],
     "tts_gap_seconds": 6,  # pause between TTS calls (free-tier rate limit)
@@ -111,16 +113,18 @@ def gemini_call(model, body, key, timeout=180):
 
 
 FORMAT_RULES = {
-    "animals": "Animal sounds game with 8 different animals (vary them from past episodes). For each animal make TWO scenes: "
-               "(1) a question scene with hide=true where {m} imitates the animal sound and asks the kids who it is; "
+    "animals": "Animal sounds game with 10 different animals (vary them from past episodes). For each animal make TWO scenes: "
+               "(1) a question scene with hide=true, show = the animal emoji (it is shown only as a mystery silhouette), "
+               "clues = 1-2 emoji hints, where {m} imitates the animal sound and asks the kids who it is; "
                "(2) a reveal scene with reveal=true, the animal emoji, caption = animal name, and one tiny fun fact.",
     "letters": "Letters lesson for these letters, in order: {letters}. For each letter: one scene with big=<the letter>, "
                "caption=<the letter>, where {m} says the letter name and its sound; then TWO scenes each with a simple word that "
                "STARTS with that letter (show = one emoji that pictures the word, caption = the word, big = the letter). "
                "Finish with one quick review scene showing the letters.",
-    "riddles": "'Who am I?' riddle game with 7 riddles about animals, fruits, vehicles or everyday things. For each riddle make TWO "
-               "scenes: (1) question with hide=true and 2-3 very simple clues ending with 'Who am I?'; (2) reveal=true with the answer "
-               "emoji and caption = the answer word.",
+    "riddles": "'Who am I?' riddle game with 10 riddles about animals, fruits, vehicles or everyday things. For each riddle make TWO "
+               "scenes: (1) question with hide=true, show = the answer emoji (it is shown only as a mystery silhouette), and 2-3 very "
+               "simple clues a 3-year-old can picture, ending with 'Who am I?' (clues = one emoji per clue); (2) reveal=true with the "
+               "answer emoji, caption = the answer word, and one tiny fun fact.",
     "story": "A short, original, gentle story (14-18 scenes) starring {m} the owl and an animal friend, with a simple lesson "
              "(sharing, kindness, bravery, saying sorry, patience...). Each scene shows 1-3 emoji of the characters/objects "
              "in that moment, caption = 1-3 key words, bg chosen to fit the scene.",
@@ -244,11 +248,14 @@ Rules:
 - 'show' = 1-3 standard single emoji characters that picture the scene (no text, no flags).
 - 'caption' = max 4 words shown on screen. 'big' = optional single letter or number to show huge, else "".
 - 'bg' = one of: meadow, forest, sea, night.
-- Total 18-30 scenes. Safe, kind, no scary or violent content, no brands or known characters.
+- 'place' = where the scene happens, in ENGLISH, for the illustrator (e.g. "sunny farm meadow with a red barn"). Keep the same place for several scenes in a row; use 4-7 different places in the episode, matching the topic.
+- 'art' = for each emoji in 'show', a short ENGLISH name of the thing to paint, same order (e.g. "ripe yellow banana", "baby elephant").
+- 'clues' = only in hide=true scenes: one emoji per clue, in the order the clues are said (e.g. ["💛", "🐒"]); else [].
+- Total 22-36 scenes. Safe, kind, no scary or violent content, no brands or known characters.
 - Make it different from these past episodes: {past_titles[-12:]}
 - 'title' = catchy YouTube title in {L['name']} (max 70 chars) that mentions {L['mascot']}.
-Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "caption": str, "big": str, "bg": str,
-"hide": bool, "reveal": bool, "intro": bool, "outro": bool}}]}}"""
+Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "art": [str], "clues": [str], "caption": str,
+"big": str, "bg": str, "place": str, "hide": bool, "reveal": bool, "intro": bool, "outro": bool}}]}}"""
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}
     for attempt, model in enumerate(text_models(key)[:5]):
@@ -834,6 +841,14 @@ class Scene:
 
 
 def render_video(episode, lang, out_path, seed, tmp):
+    if CONFIG.get("renderer", "studio") == "studio":
+        try:
+            import studio
+            return studio.render(episode, lang, out_path, seed, tmp, bot=sys.modules[__name__])
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            print("Studio v3 failed - falling back to the classic renderer:", e, flush=True)
     W, H, fps = CONFIG["width"], CONFIG["height"], CONFIG["fps"]
     raw = episode["scenes"]
     synthesize(raw, lang, tmp)
