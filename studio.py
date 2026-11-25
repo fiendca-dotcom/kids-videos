@@ -210,7 +210,7 @@ class ArtLib:
     def _gemini(self, prompt, aspect):
         while self.models and self.left() > 40:
             model = self.models[0]
-            gap = 6.5 - (time.time() - self.last)
+            gap = (6.5 if self.stats["gemini"] else 0.5) - (time.time() - self.last)
             if gap > 0:
                 time.sleep(gap)
             self.last = time.time()
@@ -739,8 +739,8 @@ class Nuni:
             out = base.copy()
             L = Image.new("RGBA", base.size, (0, 0, 0, 0))
             d = ImageDraw.Draw(L)
-            cw = bw * (0.27 + 0.08 * o)
-            top, bot = by1 - bh * 0.5, by1 + o * bh * 0.62
+            cw = bw * (0.3 + 0.12 * o)
+            top, bot = by1 - bh * 0.5, by1 + o * bh * 0.88
             d.ellipse([bcx - cw, top, bcx + cw, bot], fill=(88, 26, 36, 255))
             if o > 0.3:
                 tw, th = cw * 0.62, (bot - top) * 0.38
@@ -1429,7 +1429,7 @@ def render(episode, lang, out_path, seed, tmp, bot=None, root=None, key=None, bu
         bot.synthesize(episode["scenes"], lang, tmp)
     scenes = plan(episode, lang)
     total, nuni, lib = prepare(scenes, lang, root, seed, tmp, key, budget)
-    title = (episode.get("title") or "").split("|")[0].strip()
+    title = re.sub(r"[^\w\s!?'.,&:-]", "", (episode.get("title") or "").split("|")[0], flags=re.UNICODE).strip()
     letters = Letters(lang)
     words = title.split()
     lines = [title] if len(title) <= 22 or len(words) < 3 else [" ".join(words[: len(words) // 2 + len(words) % 2]),
