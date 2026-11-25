@@ -15,7 +15,7 @@ LORA = os.environ.get("ART_LORA", "latent-consistency/lcm-lora-sdv1-5")
 STYLE = "cute 3d cartoon, pixar style, picture book art, adorable, soft warm light, pastel colours, fluffy, detailed"
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
-       "weapon, photo, photorealistic, pig, piglet")
+       "weapon, photo, photorealistic, pig, piglet, shadow, floor, ground, reflection, glow")
 _P = None
 
 
@@ -64,12 +64,38 @@ def generate(prompt, w, h, seed, steps=4, guidance=1.3):
                  guidance_scale=guidance, generator=g).images[0]
 
 
+ANIMALS = set("""cow calf sheep lamb horse donkey goat duck duckling chick hen rooster dog puppy cat kitten rabbit frog
+turtle snail butterfly bee ladybug caterpillar squirrel hedgehog mouse fox deer bear raccoon beaver elephant giraffe lion
+tiger zebra monkey hippo rhino crocodile panda koala kangaroo camel parrot flamingo peacock swan toucan dinosaur fish whale
+dolphin octopus crab starfish seal jellyfish seahorse shark penguin reindeer owl""".split())
+HINTS = {
+    "cow": "black and white spotted dairy cow with pink nose", "calf": "baby black and white spotted calf",
+    "sheep": "fluffy white sheep with woolly coat", "horse": "brown horse with long mane", "duck": "brown mallard duck",
+    "duckling": "fluffy yellow duckling", "chick": "fluffy yellow baby chick", "hen": "brown hen chicken",
+    "rooster": "colourful rooster with red comb", "dog": "golden puppy dog", "cat": "orange tabby cat",
+    "polar bear": "white polar bear", "arctic fox": "white arctic fox", "reindeer": "brown reindeer with antlers",
+    "banana": "yellow banana fruit", "apple": "shiny red apple fruit with a leaf", "orange": "orange citrus fruit",
+    "grapes": "bunch of purple grapes", "pear": "green pear fruit", "cherry": "two red cherries", "lemon": "yellow lemon fruit",
+    "strawberry": "red strawberry", "watermelon": "slice of watermelon", "pineapple": "pineapple fruit",
+    "carrot": "orange carrot with green leaves", "corn": "corn cob", "peas": "green pea pod", "tomato": "red tomato",
+    "mushroom": "red mushroom with white spots", "snowman": "snowman with carrot nose, scarf and hat",
+    "mitten": "pair of knitted red mittens", "winter hat": "knitted winter hat with pom pom", "scarf": "striped knitted scarf",
+    "sled": "wooden sled", "gift box": "gift box with red ribbon bow", "hot cocoa": "mug of hot cocoa with marshmallows",
+    "bell": "golden bell", "star": "golden star", "moon": "crescent moon", "sun": "smiling sun", "cloud": "fluffy white cloud",
+    "ball": "colourful beach ball", "key": "golden key", "book": "children's book", "dinosaur": "friendly green dinosaur",
+}
+
+
 def item_prompt(name):
-    return f"one cute {name}, {STYLE}, full body, centered, isolated on plain white background"
+    desc = HINTS.get(name, name)
+    if name in ANIMALS or name.split()[-1] in ANIMALS:
+        return f"one cute baby {desc}, {STYLE}, full body, centered, isolated on plain white background"
+    return f"one {desc}, simple cute 3d cartoon object, {STYLE}, centered, isolated on plain white background"
 
 
 def bg_prompt(place):
-    return f"{place}, wide landscape, {STYLE}, empty scenery, no animals, no people, storybook background"
+    return (f"{place}, children's storybook illustration, soft digital painting, painterly, warm golden light, "
+            "pastel colours, cute cartoon environment, wide background, no animals, no people")
 
 
 def release():
