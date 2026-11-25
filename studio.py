@@ -146,6 +146,9 @@ def emoji_img(ch, size=None):
     if size:
         r = size / max(e.size)
         e = e.resize((max(1, int(e.width * r)), max(1, int(e.height * r))), Image.LANCZOS)
+        if r > 1.5:
+            from PIL import ImageFilter
+            e = e.filter(ImageFilter.UnsharpMask(radius=max(2, int(r)), percent=70, threshold=2))
     return e
 
 
@@ -235,7 +238,8 @@ class ArtLib:
                 if e.code == 400 and not self.no_cfg and ("imageConfig" in txt or "aspect" in txt.lower()):
                     self.no_cfg = True
                     continue
-                quota_gone = "PerDay" in txt or "limit: 0" in txt or e.code in (400, 403, 404)
+                quota_gone = ("PerDay" in txt or "limit: 0" in txt or "exceeded your current quota" in txt
+                              or e.code in (400, 402, 403, 404))
                 if quota_gone or k >= 3:
                     self.models.pop(0)
                 else:
@@ -261,6 +265,12 @@ class ArtLib:
                 im = Image.open(io.BytesIO(data))
                 im.load()
                 return im.convert("RGB")
+            except urllib.error.HTTPError as e:
+                log("  pollinations: HTTP", e.code)
+                if e.code in (401, 402, 403):
+                    self.poll_on = False
+                    return None
+                time.sleep(6)
             except Exception as e:  # noqa: BLE001
                 log("  pollinations:", str(e)[:120])
                 time.sleep(6)
@@ -380,6 +390,300 @@ def vignette(img):
     return Image.fromarray((np.asarray(img).astype(np.float32) * v).astype(np.uint8))
 
 
+# ======================================================================= layered painted scenery (no API needed)
+LW = int(W * 1.32)  # layer width (room for parallax)
+SPEEDS = (0.12, 0.3, 0.6, 1.0)  # sky, far, mid, near
+
+
+def place_kind(place, bg):
+    p = (place or "").lower()
+    rules = [("underwater", ("underwater", "under the sea", "coral", "ocean floor", "sea bed", "seabed", "reef")),
+             ("snow", ("snow", "winter", "ice", "arctic", "north pole", "frozen", "igloo")),
+             ("sunset", ("sunset", "evening", "dusk")),
+             ("night", ("night", "moon", "star", "bedtime", "space", "planet", "dark")),
+             ("sea", ("beach", "sea", "ocean", "shore", "lake", "pond", "river", "island", "harbor", "harbour")),
+             ("forest", ("forest", "woods", "jungle", "tree", "park", "garden", "orchard"))]
+    for kind, keys in rules:
+        if any(k in p for k in keys):
+            return kind
+    return bg if bg in ("forest", "sea", "night") else "meadow"
+
+
+def _grad(h, w, top, bot, y0=0, y1=None):
+    y1 = h if y1 is None else y1
+    t = np.clip((np.arange(h) - y0) / max(1, y1 - y0), 0, 1)[:, None, None]
+    return (np.array(top, np.float32) * (1 - t) + np.array(bot, np.float32) * t).repeat(w, axis=1)
+
+
+def _curve(w, base, amps, rng):
+    x = np.arange(w, dtype=np.float32)
+    y = np.full(w, base, np.float32)
+    for amp, per in amps:
+        y += amp * np.sin(2 * np.pi * x / per + rng.uniform(0, 6.28))
+    return y
+
+
+def _band(w, h, curve, top, bot, rim=None, rimw=7, blur=0.0):
+    Y = np.arange(h, dtype=np.float32)[:, None]
+    mask = Y >= curve[None, :]
+    t = np.clip((Y - curve[None, :]) / np.maximum(1, h - curve[None, :]), 0, 1)[..., None]
+    rgb = np.array(top, np.float32) * (1 - t) + np.array(bot, np.float32) * t
+    if rim is not None:
+        edge = np.clip(1 - (Y - curve[None, :]) / rimw, 0, 1)[..., None] * mask[..., None]
+        rgb = rgb * (1 - edge * 0.6) + np.array(rim, np.float32) * edge * 0.6
+    a = mask.astype(np.float32)
+    if ndimage is not None:
+        a = ndimage.gaussian_filter(a, 0.8 + blur)
+    out = np.dstack([np.clip(rgb, 0, 255), a[..., None] * 255]).astype(np.uint8)
+    return Image.fromarray(out, "RGBA")
+
+
+def _tree(d, x, y, s, leaf, dark, light, trunk=(120, 80, 45)):
+    d.rounded_rectangle([x - 9 * s, y - 70 * s, x + 9 * s, y + 4], int(5 * s), fill=trunk)
+    for dx, dy, r in ((0, -120, 62), (-45, -88, 48), (45, -88, 48), (0, -80, 50)):
+        d.ellipse([x + dx * s - r * s + 6 * s, y + dy * s - r * s + 8 * s, x + dx * s + r * s + 6 * s, y + dy * s + r * s + 8 * s], fill=dark)
+    for dx, dy, r in ((0, -120, 62), (-45, -88, 48), (45, -88, 48), (0, -80, 50)):
+        d.ellipse([x + dx * s - r * s, y + dy * s - r * s, x + dx * s + r * s, y + dy * s + r * s], fill=leaf)
+    for dx, dy, r in ((-18, -140, 26), (-55, -100, 18), (28, -105, 16)):
+        d.ellipse([x + dx * s - r * s, y + dy * s - r * s, x + dx * s + r * s, y + dy * s + r * s], fill=light)
+
+
+def _pine(d, x, y, s, leaf, dark, snow=False):
+    d.rectangle([x - 7 * s, y - 30 * s, x + 7 * s, y + 2], fill=(110, 75, 50))
+    for k in range(4):
+        top = y - 40 * s - k * 38 * s
+        wd = (70 - k * 13) * s
+        d.polygon([(x, top - 60 * s), (x - wd, top + 20 * s), (x + wd, top + 20 * s)], fill=dark if k % 2 else leaf)
+        if snow:
+            d.polygon([(x, top - 60 * s), (x - wd * 0.45, top - 20 * s), (x + wd * 0.45, top - 20 * s)], fill=(250, 252, 255))
+
+
+def _flower(d, x, y, r, col):
+    for k in range(5):
+        a = k * 2 * math.pi / 5
+        d.ellipse([x + math.cos(a) * r - r * 0.7, y + math.sin(a) * r - r * 0.7, x + math.cos(a) * r + r * 0.7, y + math.sin(a) * r + r * 0.7], fill=col)
+    d.ellipse([x - r * 0.6, y - r * 0.6, x + r * 0.6, y + r * 0.6], fill=(255, 205, 60))
+
+
+def _soft(img, r):
+    from PIL import ImageFilter
+    return img.filter(ImageFilter.GaussianBlur(r))
+
+
+def _clouds(w, h, rng, n=7, alpha=235, ymax=0.4):
+    L = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    d = ImageDraw.Draw(L)
+    for _ in range(n):
+        cx, cy, sc = rng.uniform(0, w), rng.uniform(h * 0.06, h * ymax), rng.uniform(0.9, 1.9)
+        for dx, dy, r0 in [(0, 0, 50), (55, -24, 64), (118, 0, 50), (58, 16, 58), (-40, 12, 40)]:
+            r1 = r0 * sc
+            d.ellipse([cx + dx * sc - r1, cy + dy * sc - r1, cx + dx * sc + r1, cy + dy * sc + r1], fill=(255, 255, 255, alpha))
+    return _soft(L, 3)
+
+
+def _glow(arr, cx, cy, r, col, strength=1.0):
+    h, w = arr.shape[:2]
+    yy, xx = np.ogrid[0:h, 0:w]
+    dd = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+    g = np.clip(1 - dd, 0, 1) ** 2 * strength
+    arr[...] = arr * (1 - g[..., None]) + np.array(col, np.float32) * g[..., None]
+
+
+_SCENERY = {}
+
+
+def scenery(kind):
+    if kind in _SCENERY:
+        return _SCENERY[kind]
+    rng = random.Random(kind)
+    w, h = LW, H
+    skies = {"meadow": ((90, 170, 245), (205, 235, 255)), "forest": ((100, 180, 240), (215, 240, 250)),
+             "sea": ((80, 165, 245), (215, 238, 255)), "night": ((14, 18, 60), (70, 60, 140)),
+             "snow": ((150, 195, 240), (235, 245, 255)), "underwater": ((40, 150, 200), (10, 60, 120)),
+             "sunset": ((90, 80, 170), (255, 170, 110))}
+    top, bot = skies.get(kind, skies["meadow"])
+    sky = _grad(h, w, top, bot, 0, int(h * (0.95 if kind != "underwater" else 1.0)))
+    if kind in ("meadow", "forest", "sea", "snow"):
+        _glow(sky, w * 0.78, h * 0.16, 420, (255, 250, 220), 0.8)
+        _glow(sky, w * 0.78, h * 0.16, 95, (255, 236, 150), 1.0)
+    elif kind == "sunset":
+        _glow(sky, w * 0.5, h * 0.62, 700, (255, 210, 150), 0.9)
+        _glow(sky, w * 0.5, h * 0.62, 130, (255, 225, 120), 1.0)
+    elif kind == "night":
+        _glow(sky, w * 0.8, h * 0.17, 300, (120, 120, 190), 0.6)
+        _glow(sky, w * 0.8, h * 0.17, 70, (255, 250, 220), 1.0)
+    skyimg = Image.fromarray(np.clip(sky, 0, 255).astype(np.uint8), "RGB")
+    d = ImageDraw.Draw(skyimg, "RGBA")
+    if kind == "night":
+        mx, my = w * 0.8, h * 0.17
+        d.ellipse([mx - 55, my - 55, mx + 55, my + 55], fill=(255, 248, 215))
+        d.ellipse([mx - 30, my - 70, mx + 75, my + 35], fill=tuple(int(v) for v in sky[int(my - 20), int(mx + 30)]))
+        for _ in range(260):
+            x, y, s = rng.uniform(0, w), rng.uniform(0, h * 0.62), rng.uniform(1, 3.2)
+            d.ellipse([x - s, y - s, x + s, y + s], fill=(255, 255, 230, rng.randint(110, 255)))
+    elif kind == "underwater":
+        rays = Image.new("RGBA", (w, h), (200, 240, 255, 0))
+        dr = ImageDraw.Draw(rays)
+        for _ in range(9):
+            x = rng.uniform(0, w)
+            dr.polygon([(x, 0), (x + rng.uniform(60, 140), 0), (x + rng.uniform(200, 420), h), (x + rng.uniform(-80, 120), h)],
+                       fill=(200, 240, 255, rng.randint(18, 40)))
+        skyimg.paste(_soft(rays, 14), (0, 0), _soft(rays, 14))
+    else:
+        cl = _clouds(w, h, rng, 8, 225 if kind != "sunset" else 150)
+        skyimg.paste(cl, (0, 0), cl)
+    # far / mid / near
+    pal = {
+        "meadow": [((150, 200, 170), (175, 215, 185)), ((110, 195, 90), (70, 160, 70)), ((95, 180, 70), (55, 135, 50))],
+        "forest": [((95, 150, 120), (120, 170, 140)), ((75, 160, 80), (45, 120, 55)), ((80, 165, 65), (45, 120, 45))],
+        "sea": [((70, 150, 220), (90, 175, 230)), ((40, 140, 210), (30, 110, 190)), ((245, 220, 160), (225, 195, 135))],
+        "night": [((45, 55, 105), (55, 60, 115)), ((30, 70, 85), (20, 50, 65)), ((25, 60, 60), (15, 40, 45))],
+        "snow": [((190, 210, 240), (215, 228, 250)), ((235, 242, 252), (200, 215, 240)), ((248, 250, 255), (215, 228, 245))],
+        "underwater": [((25, 90, 140), (20, 70, 120)), ((30, 110, 130), (20, 80, 105)), ((230, 205, 150), (200, 170, 115))],
+        "sunset": [((130, 90, 160), (110, 80, 150)), ((95, 70, 130), (70, 55, 110)), ((70, 120, 80), (45, 90, 60))],
+    }[kind]
+    if kind == "sea":
+        far = _band(w, h, np.full(w, h * 0.56, np.float32), *pal[0], rim=(235, 248, 255), rimw=5)
+        fd = ImageDraw.Draw(far, "RGBA")
+        for _ in range(140):
+            x, y = rng.uniform(0, w), rng.uniform(h * 0.58, h * 0.8)
+            fd.line([(x, y), (x + rng.uniform(15, 50), y)], fill=(255, 255, 255, rng.randint(60, 140)), width=3)
+    else:
+        far = _band(w, h, _curve(w, h * 0.55, [(38, 900), (18, 380)], rng), *pal[0], rim=(240, 245, 255), blur=1.5)
+        if kind == "forest":
+            fd = ImageDraw.Draw(far)
+            for x in range(0, w, 70):
+                y = h * 0.56 + rng.uniform(-10, 10)
+                r = rng.uniform(45, 70)
+                fd.ellipse([x - r, y - r, x + r, y + r], fill=pal[0][0])
+            far = _soft(far, 1.5)
+    mid_curve = _curve(w, h * (0.68 if kind != "sea" else 0.9), [(45, 1100), (22, 450)], rng)
+    if kind == "sea":
+        mid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    else:
+        mid = _band(w, h, mid_curve, *pal[1], rim=(255, 255, 230) if kind not in ("night", "underwater") else None)
+    md = ImageDraw.Draw(mid)
+    if kind in ("meadow", "forest", "sunset"):
+        n = 9 if kind == "forest" else 4
+        xs = sorted(rng.uniform(0, w) for _ in range(n))
+        for x in xs:
+            s = rng.uniform(0.9, 1.5) if kind == "forest" else rng.uniform(0.8, 1.2)
+            leaf = (70, 165, 75) if kind != "sunset" else (70, 90, 110)
+            _tree(md, x, mid_curve[int(min(w - 1, x))] + 10, s, leaf, (45, 120, 55) if kind != "sunset" else (50, 65, 90),
+                  (130, 210, 110) if kind != "sunset" else (110, 120, 150))
+    elif kind == "snow":
+        for x in sorted(rng.uniform(0, w) for _ in range(8)):
+            _pine(md, x, mid_curve[int(min(w - 1, x))] + 10, rng.uniform(0.8, 1.3), (50, 120, 90), (35, 95, 70), snow=True)
+    elif kind == "night":
+        for x in sorted(rng.uniform(0, w) for _ in range(4)):
+            _tree(md, x, mid_curve[int(min(w - 1, x))] + 10, rng.uniform(0.9, 1.2), (30, 75, 80), (20, 55, 60), (45, 95, 100))
+    elif kind == "underwater":
+        for _ in range(16):
+            x = rng.uniform(0, w)
+            y0 = mid_curve[int(min(w - 1, x))] + 20
+            ln, col = rng.uniform(140, 320), rng.choice([(60, 170, 90), (40, 140, 80), (90, 190, 110)])
+            pts = [(x + 14 * math.sin(k / 3), y0 - k * ln / 12) for k in range(13)]
+            md.line(pts, fill=col, width=int(rng.uniform(10, 18)), joint="curve")
+        for _ in range(10):
+            x = rng.uniform(0, w)
+            y0 = mid_curve[int(min(w - 1, x))] + 10
+            col = rng.choice([(255, 120, 140), (255, 170, 90), (240, 110, 200)])
+            for k in range(5):
+                r = rng.uniform(14, 26)
+                xx, yy = x + rng.uniform(-35, 35), y0 - rng.uniform(0, 50)
+                md.ellipse([xx - r, yy - r, xx + r, yy + r], fill=col)
+    near_curve = _curve(w, h * 0.86, [(16, 800), (8, 260)], rng)
+    if kind == "sea":
+        near_curve = _curve(w, h * 0.8, [(30, 1400), (10, 400)], rng)
+    near = _band(w, h, near_curve, *pal[2], rim=(255, 255, 240) if kind not in ("night", "underwater") else None, rimw=10)
+    nd = ImageDraw.Draw(near)
+    if kind in ("meadow", "forest", "sunset", "night"):
+        gcol = [(70, 160, 55), (100, 190, 70), (50, 130, 45)] if kind != "night" else [(30, 75, 70), (40, 90, 85)]
+        for x in range(0, w, 7):
+            y = near_curve[x] + 4
+            hgt = rng.uniform(14, 34)
+            nd.polygon([(x - 4, y + 6), (x + rng.uniform(-6, 6), y - hgt), (x + 4, y + 6)], fill=rng.choice(gcol))
+        if kind != "night":
+            for _ in range(90):
+                x = rng.uniform(0, w)
+                y = rng.uniform(near_curve[int(min(w - 1, x))] + 18, h - 10)
+                _flower(nd, x, y, rng.uniform(5, 9), rng.choice([(255, 120, 160), (255, 255, 255), (190, 140, 255), (255, 200, 80)]))
+    elif kind == "sea":
+        for _ in range(40):
+            x = rng.uniform(0, w)
+            y = rng.uniform(near_curve[int(min(w - 1, x))] + 25, h - 10)
+            r = rng.uniform(4, 9)
+            nd.ellipse([x - r, y - r * 0.7, x + r, y + r * 0.7], fill=rng.choice([(255, 240, 220), (250, 200, 190), (235, 215, 180)]))
+        for _ in range(10):
+            x = rng.uniform(0, w)
+            y = near_curve[int(min(w - 1, x))] + 6
+            for k in range(7):
+                nd.line([(x, y), (x + rng.uniform(-30, 30), y - rng.uniform(25, 55))], fill=(110, 170, 80), width=4)
+    elif kind == "underwater":
+        for _ in range(30):
+            x = rng.uniform(0, w)
+            y = rng.uniform(near_curve[int(min(w - 1, x))] + 20, h - 10)
+            r = rng.uniform(5, 12)
+            nd.ellipse([x - r, y - r * 0.7, x + r, y + r * 0.7], fill=rng.choice([(255, 230, 210), (240, 200, 160), (255, 190, 200)]))
+    elif kind == "snow":
+        for _ in range(6):
+            x = rng.uniform(0, w)
+            _pine(nd, x, near_curve[int(min(w - 1, x))] + 60, rng.uniform(1.2, 1.6), (45, 115, 85), (30, 90, 65), snow=True)
+    out = {"kind": kind, "sky": skyimg, "far": far, "mid": mid, "near": near}
+    _SCENERY[kind] = out
+    return out
+
+
+def particles(img, kind, gt, seed=0):
+    if kind not in ("night", "snow", "underwater", "meadow", "sunset"):
+        return
+    d = ImageDraw.Draw(img, "RGBA")
+    rng = random.Random(f"p{kind}")
+    for k in range(40 if kind == "snow" else 22):
+        x0, y0, sp, ph = rng.uniform(0, W), rng.uniform(0, H), rng.uniform(0.4, 1.0), rng.uniform(0, 6.28)
+        if kind == "snow":
+            y = (y0 + gt * 60 * sp) % (H + 20) - 10
+            x = x0 + math.sin(gt * 0.8 + ph) * 25
+            r = 3 + 4 * sp
+            d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 255, 255, 220))
+        elif kind == "underwater":
+            y = H - (y0 + gt * 70 * sp) % (H + 30)
+            x = x0 + math.sin(gt * 1.5 + ph) * 12
+            r = 5 + 9 * sp
+            d.ellipse([x - r, y - r, x + r, y + r], outline=(220, 245, 255, 170), width=3)
+            d.ellipse([x - r * 0.45, y - r * 0.6, x - r * 0.1, y - r * 0.25], fill=(255, 255, 255, 170))
+        elif kind == "night":
+            x = x0 + math.sin(gt * 0.5 + ph) * 40
+            y = H * 0.55 + (y0 % (H * 0.4)) + math.cos(gt * 0.7 + ph) * 25
+            a = int(120 + 120 * math.sin(gt * 3 + ph))
+            d.ellipse([x - 9, y - 9, x + 9, y + 9], fill=(255, 240, 120, max(0, a // 3)))
+            d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 250, 180, max(0, a)))
+        else:
+            x = (x0 + gt * 18 * sp) % (W + 20) - 10
+            y = y0 * 0.7 + math.sin(gt * 1.2 + ph) * 20
+            a = int(90 + 80 * math.sin(gt * 2 + ph))
+            d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 255, 230, max(0, a)))
+
+
+def layers_frame(S, t):
+    L = S["layers"]
+    cam = S["cam"]
+    u = clamp((S["start"] + t - cam["t0"]) / max(0.1, cam["len"]))
+    span = (LW - W)
+    pos = cam["p0"] + (cam["p1"] - cam["p0"]) * u  # 0..1 across the layer
+    img = None
+    for name, sp in zip(("sky", "far", "mid", "near"), SPEEDS):
+        ox = int(span * (0.5 + (pos - 0.5) * sp))
+        layer = L[name]
+        crop = layer.crop((ox, 0, ox + W, H))
+        if img is None:
+            img = crop.convert("RGB") if crop.mode != "RGB" else crop.copy()
+        else:
+            img.paste(crop, (0, 0), crop)
+    particles(img, L["kind"], S["start"] + t)
+    return img
+
+
 # ======================================================================= Nuni
 class Nuni:
     def __init__(self, root):
@@ -401,31 +705,54 @@ class Nuni:
 
     def _face(self):
         im = self.src["idle"]
-        self.src["open"], self.src["blink"], self.src["blink_open"] = im, im, im
+        self.levels = 6
+        for k in range(self.levels):
+            self.src[f"m{k}"] = im
+            self.src[f"b{k}"] = im
+        if ndimage is None:
+            return
         a = np.asarray(im).astype(np.int16)
         h, w = a.shape[:2]
         r, g, b, al = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
         beak = (r > 185) & (g > 105) & (g < 205) & (b < 120) & (r - b > 90) & (al > 200)
         beak[int(h * 0.55):] = False
         beak[: int(h * 0.15)] = False
-        ys, xs = np.nonzero(beak)
-        if len(xs) < 30 or ndimage is None:
+        if beak.sum() < 30:
             return
         lab, n = ndimage.label(beak)
         big = 1 + int(np.argmax(ndimage.sum(beak, lab, range(1, n + 1))))
-        beak = lab == big
+        beak = ndimage.binary_dilation(ndimage.binary_closing(lab == big, iterations=2), iterations=1)
         ys, xs = np.nonzero(beak)
         bx0, bx1, by0, by1 = xs.min(), xs.max(), ys.min(), ys.max()
         bw, bh, bcx = bx1 - bx0, by1 - by0, (bx0 + bx1) / 2
-        beak_layer = Image.fromarray(np.where(beak[..., None], a, 0).astype(np.uint8), "RGBA")
-        op = im.copy()
-        d = ImageDraw.Draw(op)
-        mw, mh = bw * 0.72, bh * 0.9
-        top = by1 - bh * 0.5
-        d.ellipse([bcx - mw / 2, top, bcx + mw / 2, top + mh], fill=(115, 38, 45, 255))
-        d.ellipse([bcx - mw * 0.32, top + mh * 0.5, bcx + mw * 0.32, top + mh * 0.95], fill=(236, 118, 130, 255))
-        op.alpha_composite(beak_layer)
-        self.src["open"] = op
+        bk = a[beak][:, :3]
+        light = tuple(int(v) for v in np.percentile(bk, 80, axis=0))
+        darkc = tuple(int(v) for v in np.percentile(bk, 15, axis=0))
+        lay = a.copy().astype(np.uint8)
+        lay[..., 3] = (np.minimum(ndimage.gaussian_filter(beak.astype(np.float32), 0.6), 1) * a[..., 3]).astype(np.uint8)
+        beak_layer = Image.fromarray(lay, "RGBA")
+        from PIL import ImageFilter
+
+        def mouth(base, o):
+            if o <= 0.02:
+                return base
+            out = base.copy()
+            L = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(L)
+            cw = bw * (0.27 + 0.08 * o)
+            top, bot = by1 - bh * 0.5, by1 + o * bh * 0.62
+            d.ellipse([bcx - cw, top, bcx + cw, bot], fill=(88, 26, 36, 255))
+            if o > 0.3:
+                tw, th = cw * 0.62, (bot - top) * 0.38
+                d.ellipse([bcx - tw, bot - th - bh * 0.04, bcx + tw, bot + bh * 0.02], fill=(228, 108, 124, 255))
+            jw, jh = cw * 0.95, bh * 0.2
+            d.chord([bcx - jw, bot - jh * 1.6, bcx + jw, bot + jh * 0.6], 0, 180, fill=darkc + (255,))
+            d.chord([bcx - jw * 0.9, bot - jh * 1.6, bcx + jw * 0.9, bot + jh * 0.35], 0, 180, fill=light + (255,))
+            out.alpha_composite(L.filter(ImageFilter.GaussianBlur(0.7)))
+            out.alpha_composite(beak_layer)
+            return out
+        for k in range(self.levels):
+            self.src[f"m{k}"] = mouth(im, k / (self.levels - 1))
         # eyes = the two biggest very dark blobs above the beak
         dark = (r < 75) & (g < 65) & (b < 65) & (al > 200)
         dark[int(by1):] = False
@@ -433,32 +760,26 @@ class Nuni:
         if n < 2:
             return
         sizes = ndimage.sum(dark, lab, range(1, n + 1))
-        order = np.argsort(sizes)[::-1][:2]
         eyes = []
-        for o in order:
+        for o in np.argsort(sizes)[::-1][:2]:
             yy, xx = np.nonzero(lab == o + 1)
             eyes.append((xx.mean(), yy.mean(), math.sqrt(len(xx) / math.pi)))
-        self.eyes = eyes
-
-        def closed(base):
-            out = base.copy()
-            lid = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            d = ImageDraw.Draw(lid)
-            yy, xx = np.mgrid[0:h, 0:w]
-            for cx, cy, rad in eyes:
-                R = rad * 2.5
-                rr = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-                ring = (rr > R * 1.15) & (rr < R * 1.45) & (al > 200) & (r + g + b > 520)
-                col = tuple(int(v) for v in np.median(a[ring][:, :3], axis=0)) if ring.sum() > 20 else (236, 222, 200)
-                d.ellipse([cx - R, cy - R, cx + R, cy + R], fill=col + (255,))
-                d.arc([cx - R * 0.8, cy - R * 0.7, cx + R * 0.8, cy + R * 0.45], 20, 160, fill=(80, 52, 45, 255),
-                      width=max(3, int(R * 0.14)))
-            from PIL import ImageFilter
-            lid = lid.filter(ImageFilter.GaussianBlur(1.2))
-            out.alpha_composite(lid)
-            return out
-        self.src["blink"] = closed(im)
-        self.src["blink_open"] = closed(op)
+        yy, xx = np.mgrid[0:h, 0:w]
+        lid = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(lid)
+        for cx, cy, rad in eyes:
+            R = rad * 2.5
+            rr = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+            ring = (rr > R * 1.15) & (rr < R * 1.45) & (al > 200) & (r + g + b > 520)
+            col = tuple(int(v) for v in np.median(a[ring][:, :3], axis=0)) if ring.sum() > 20 else (236, 222, 200)
+            d.ellipse([cx - R, cy - R, cx + R, cy + R], fill=col + (255,))
+            d.arc([cx - R * 0.8, cy - R * 0.7, cx + R * 0.8, cy + R * 0.45], 20, 160, fill=(80, 52, 45, 255),
+                  width=max(3, int(R * 0.14)))
+        lid = lid.filter(ImageFilter.GaussianBlur(1.2))
+        for k in range(self.levels):
+            m = self.src[f"m{k}"].copy()
+            m.alpha_composite(lid)
+            self.src[f"b{k}"] = m
 
     def sprite(self, key, height, tilt=0):
         q = max(8, int(height / 4) * 4)
@@ -476,10 +797,10 @@ class Nuni:
             self.cache[k] = sp
         return sp
 
-    def draw(self, img, cx, foot, height, t, pose="idle", talking=False, hop=0.0, tilt=0.0):
+    def draw(self, img, cx, foot, height, t, pose="idle", mouth=0, hop=0.0, tilt=0.0):
         if pose == "idle":
             blink = (t % 3.9) < 0.12 or (t % 7.3) < 0.1
-            key = ("blink_open" if blink else "open") if talking else ("blink" if blink else "idle")
+            key = f"{'b' if blink else 'm'}{int(mouth)}"
         else:
             key = pose
         breathe = 1 + 0.012 * math.sin(t * 2.3)
@@ -746,7 +1067,8 @@ def plan(episode, lang):
             bg = "meadow"
         prev_place = place
         show = [e for e in (sd.get("show") or []) if isinstance(e, str) and e.strip()][:3]
-        art = [a for a in (sd.get("art") or []) if isinstance(a, str) and a.strip()][:3]
+        art = [re.sub(r"\b(silhouette|shadow|mystery|hidden)\b", "", a, flags=re.I).strip(" ,-")
+               for a in (sd.get("art") or []) if isinstance(a, str) and a.strip()][:3]
         if kind == "hide":
             nxt = raw[i + 1] if i + 1 < len(raw) else {}
             if not art:
@@ -795,6 +1117,8 @@ def fetch_art(scenes, lib, max_bg=10, max_items=26):
 
 # ======================================================================= frames
 def bg_frame(S, t):
+    if S.get("layers"):
+        return layers_frame(S, t)
     base = S["bgimg"]
     cam = S["cam"]
     u = clamp((S["start"] + t - cam["t0"]) / max(0.1, cam["len"]))
@@ -821,13 +1145,13 @@ def frame(si, f):
     img = bg_frame(S, t)
     d = ImageDraw.Draw(img, "RGBA")
     kind = S["kind"]
-    talk = bool(S["env"][min(f, len(S["env"]) - 1)] > 0.28)
+    mo = int(S["mouth"][min(f, len(S["mouth"]) - 1)])
     nuni = ART["nuni"]
     if kind == "intro":
         k = ease_back((t - 0.1) / 0.8)
-        pose = "talk" if t < 2.2 else ("happy" if (t % 4) < 0.6 else "idle")
+        pose = "talk" if t < 1.3 else ("happy" if 4.0 < (t % 7) < 4.7 else "idle")
         hop = abs(math.sin(t * 4)) * 30 if pose == "happy" else 0
-        nuni.draw(img, W / 2, H * 0.97, H * 0.5 * k + 1, gt, pose, talk, hop, math.sin(t * 2) * 2)
+        nuni.draw(img, W / 2, H * 0.97, H * 0.5 * k + 1, gt, pose, mo, hop, math.sin(t * 2) * 2 + mo * 0.4)
         for j, (letters, y) in enumerate(S["title"]):
             draw_letters(img, ("title", j), letters, W / 2, y, t, start=0.5 + j * 0.4)
         for j in range(10):
@@ -835,9 +1159,9 @@ def frame(si, f):
             x, y = W / 2 + math.cos(a) * 520, H * 0.62 + math.sin(a) * 260
             star(d, x, y, 10 + 8 * abs(math.sin(t * 3 + j)), (255, 240, 140, 200))
     elif kind == "outro":
-        pose = "happy" if (t % 2.6) < 1.0 else "talk"
+        pose = "happy" if (t % 3.2) < 1.0 else ("talk" if (t % 3.2) < 1.6 else "idle")
         hop = abs(math.sin(t * math.pi / 1.3)) * 45 if pose == "happy" else 0
-        nuni.draw(img, W / 2, H * 0.97, H * 0.52, gt, pose, talk, hop)
+        nuni.draw(img, W / 2, H * 0.97, H * 0.52, gt, pose, mo, hop)
         if S["cap"]:
             draw_letters(img, (si, "cap"), S["cap"], W / 2, H * 0.16, t, start=0.3)
         for j in range(14):
@@ -853,7 +1177,7 @@ def frame(si, f):
         hopping = kind == "reveal" and t < 1.8
         pose = "happy" if hopping else "idle"
         hop = abs(math.sin(t * 7)) * 40 if hopping else 0
-        nuni.draw(img, W * 0.16, H * 0.97, H * 0.42, gt, pose, talk and not hopping, hop, math.sin(gt * 1.7) * 2.5)
+        nuni.draw(img, W * 0.16, H * 0.97, H * 0.44, gt, pose, 0 if hopping else mo, hop, math.sin(gt * 1.7) * 2.5 + mo * 0.5)
         slots, size = item_slots(len(S["stk"]), bool(S["bigtile"])) if S["stk"] else ([], 0)
         if S["bigtile"] is not None:
             k = ease_back((t - 0.1) / 0.45)
@@ -976,7 +1300,14 @@ def prepare(scenes, lang, root, seed, tmp, key, budget):
                 env[f] = np.sqrt(np.mean(a[a0:a0 + hop] ** 2))
         if env.max() > 0:
             env = env / max(np.percentile(env[env > 0], 90), 1e-4)
+        mo = np.zeros(s["nf"])
+        cur = 0.0
+        for f in range(s["nf"]):
+            target = clamp((env[f] - 0.12) / 0.75)
+            cur += (target - cur) * (0.65 if target > cur else 0.45)
+            mo[f] = round(cur * 5)
         s["env"] = env
+        s["mouth"] = mo
     total = t
     # camera: one continuous slow move per run of scenes in the same place
     runs = []
@@ -993,13 +1324,19 @@ def prepare(scenes, lang, root, seed, tmp, key, budget):
         z0, z1 = (1.0, 1.07) if k % 2 == 0 else (1.07, 1.0)
         x0 = rng.uniform(-0.6, 0.6)
         cam = {"t0": t0, "len": ln, "z0": z0, "z1": z1, "x0": x0, "x1": -x0 * 0.5, "y": rng.uniform(-0.3, 0.3)}
+        cam["p0"], cam["p1"] = (0.15, 0.85) if k % 2 == 0 else (0.85, 0.15)
         bg = bgs.get(r["place"])
+        layers = None
         if bg is None:
-            bg = painted_fallback(r["scenes"][0]["bg"], k)
-        bg = vignette(cover(bg, BGW, BGH))
+            first = r["scenes"][0]
+            kind = "sunset" if first["kind"] == "outro" and not first.get("place_set") else place_kind(r["place"], first["bg"])
+            layers = scenery(kind)
+        else:
+            bg = vignette(cover(bg, BGW, BGH))
         for s in r["scenes"]:
             s["cam"] = cam
             s["bgimg"] = bg
+            s["layers"] = layers
     hearts = [emoji_img(e, 90) for e in ("💖", "⭐", "💛", "🌟")]
     qbadge = badge(letters.glyph("?", 120, (255, 140, 40))[0], 70, (255, 140, 40))
     nums = [letters.glyph(str(n), 104, (255, 120, 40))[0] for n in (1, 2, 3)]
