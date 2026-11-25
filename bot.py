@@ -995,6 +995,15 @@ def plan_episode(lang, fmt, ep, state):
         pos = state.setdefault("letter_pos", {}).get(lang, 0) % len(alpha)
         letters = alpha[pos:pos + 4] or alpha[:4]
     trends = (strat.get("brief") or "") + youtube_trends()
+    try:
+        import studio
+        lib_items, lib_places = studio.library_names(ROOT)
+        if len(lib_items) >= 8:
+            trends = (f"OUR PICTURE LIBRARY - these subjects are already illustrated, so use these exact English names in "
+                      f"'art' and build the riddles / animal games mainly from them: {', '.join(lib_items)}.\n"
+                      + (f"Illustrated places for 'place': {', '.join(lib_places)}.\n" if lib_places else "") + trends)
+    except Exception as e:  # noqa: BLE001
+        print("Library list failed:", e, flush=True)
     data = gemini_script(lang, fmt, ep, past, letters, key, trends) if key else None
     if not data:
         print(f"Using offline fallback script for {lang}")
