@@ -131,10 +131,23 @@ def cutout_grab(img):
     frac = fg.mean()
     if frac < 0.04 or frac > 0.85:
         return None
+    ref = np.median(edge, axis=0)
+    near = np.abs(ai - ref[None, None, :]).sum(2) < 40
+    if (fg & near).sum() > 0.18 * fg.sum():  # a chunk of the backdrop is still inside
+        return None
     alpha = ndimage.gaussian_filter(fg.astype(np.float32), 0.8)
     res = Image.fromarray(np.dstack([a, (np.clip(alpha, 0, 1) * 255).astype(np.uint8)]), "RGBA")
     bb = res.getbbox()
     return res.crop(bb) if bb else None
+
+
+def boxy(rgba):
+    """True if a cut-out still carries a rectangle of backdrop (its outer frame is mostly opaque)."""
+    al = np.asarray(rgba.split()[3]) > 128
+    h, w = al.shape
+    k = max(2, int(min(h, w) * 0.03))
+    sides = [al[:k].mean(), al[-k:].mean(), al[:, :k].mean(), al[:, -k:].mean()]
+    return sum(v > 0.5 for v in sides) >= 3 or float(np.mean(sides)) > 0.55
 
 
 def cutout(img):
@@ -142,7 +155,7 @@ def cutout(img):
     if ndimage is None:
         return None
     g = cutout_grab(img)
-    if g is not None:
+    if g is not None and not boxy(g):
         return g
     im = img.convert("RGB")
     im.thumbnail((900, 900), Image.LANCZOS)
@@ -172,7 +185,8 @@ def cutout(img):
     out = np.dstack([a.astype(np.uint8), (np.clip(alpha, 0, 1) * 255).astype(np.uint8)])
     res = Image.fromarray(out, "RGBA")
     bb = res.getbbox()
-    return res.crop(bb) if bb else None
+    res = res.crop(bb) if bb else None
+    return None if res is None or boxy(res) else res
 
 
 _EMOJI = {}
