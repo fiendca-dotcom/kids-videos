@@ -13,7 +13,7 @@ jobs:
           key: hf-dreamshaper8-lcm-v1
       - run: sudo apt-get update && sudo apt-get install -y fonts-noto-core fonts-noto-color-emoji libraqm0
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install Pillow numpy scipy diffusers transformers accelerate peft safetensors
+      - run: pip install Pillow numpy scipy diffusers transformers accelerate peft safetensors opencv-python-headless
       - run: nproc && free -h && python artgen.py --demo
       - if: always()
         uses: actions/upload-artifact@v4
