@@ -1,5 +1,5 @@
 {
-  "episode": 1,
+  "episode": 2,
   "history": [
     {
       "episode": 1,
@@ -23,6 +23,14 @@
       "topic": "counting",
       "video_id": "79Rl10o_QQY",
       "title": "Let's Count to 10! | Counting for Kids - Episode 1",
+      "date": "2026-11-24"
+    },
+    {
+      "episode": 2,
+      "lang": "en",
+      "topic": "letters",
+      "video_id": "09SDZOeQrdg",
+      "title": "Who Makes This Sound? | Animal Sounds for Kids with Nuni",
       "date": "2026-11-24"
     }
   ]
