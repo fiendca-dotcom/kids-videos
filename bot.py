@@ -794,7 +794,7 @@ class NuniSprite:
     @staticmethod
     def load():
         p = ROOT / "assets"
-        names = {"idle": "nuni_idle.png", "talk": "nuni_talk.png", "happy": "nuni_happy.png"}
+        names = {"idle": "nuni_idle.webp", "talk": "nuni_talk.webp", "happy": "nuni_happy.webp"}
         if not all((p / n).exists() for n in names.values()):
             print("Mascot: code-drawn owl (assets/nuni_*.png not found)")
             return None
