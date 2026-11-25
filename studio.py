@@ -1154,6 +1154,14 @@ def frame(si, f):
         nuni.draw(img, W / 2, H * 0.97, H * 0.5 * k + 1, gt, pose, mo, hop, math.sin(t * 2) * 2 + mo * 0.4)
         for j, (letters, y) in enumerate(S["title"]):
             draw_letters(img, ("title", j), letters, W / 2, y, t, start=0.5 + j * 0.4)
+        tz = S.get("teaser") or []
+        spots = [(0.2, 0.52), (0.8, 0.52), (0.1, 0.78), (0.9, 0.78), (0.3, 0.8), (0.7, 0.8)]
+        for j, sil in enumerate(tz[:6]):
+            k = ease_back((t - 1.2 - j * 0.35) / 0.45)
+            sp = scaled(("teaser", j), sil, k)
+            if sp is not None:
+                x, y = spots[j]
+                paste_center(img, sp, x * W, y * H + math.sin(t * 2.4 + j) * 10)
         for j in range(10):
             a = j / 10 * 2 * math.pi + t * 0.5
             x, y = W / 2 + math.cos(a) * 520, H * 0.62 + math.sin(a) * 260
@@ -1349,6 +1357,7 @@ def prepare(scenes, lang, root, seed, tmp, key, budget):
             n = len(s["items"])
             sz = {1: 0.5, 2: 0.36, 3: 0.28}[min(n, 3)] * H * (0.8 if s["big"] else 1.0)
             stk.append(sticker(cut, sz, silhouette=s["kind"] == "hide"))
+            s.setdefault("stk_src", cut)
         s["stk"] = stk
         s["bigtile"] = None
         if s["big"]:
@@ -1417,6 +1426,98 @@ def build_audio(scenes, total, seed, path):
         w.writeframes((mix * 32767).astype("<i2").tobytes())
 
 
+CHAPTER_WORDS = {"intro": {"en": "Hello!", "he": "שלום!", "ar": "مرحبا!"},
+                 "riddle": {"en": "Riddle", "he": "חידה", "ar": "لغز"},
+                 "letter": {"en": "Letter", "he": "האות", "ar": "حرف"},
+                 "bye": {"en": "Goodbye", "he": "להתראות", "ar": "مع السلامة"},
+                 "guess": {"en": "Can you guess?", "he": "?תצליחו לנחש", "ar": "هل تستطيع التخمين؟"},
+                 "full": {"en": "Full video on the channel!", "he": "!הסרטון המלא בערוץ", "ar": "الفيديو الكامل في القناة!"}}
+LAST = {}
+
+
+def chapters(scenes, lang):
+    out, n = [], 0
+    for s in scenes:
+        if s["kind"] == "intro":
+            out.append((s["start"], CHAPTER_WORDS["intro"].get(lang, "Hello!")))
+        elif s["kind"] == "hide":
+            n += 1
+            out.append((s["start"], f'{CHAPTER_WORDS["riddle"].get(lang, "Riddle")} {n}'))
+        elif s["big"] and s["kind"] == "normal" and (not out or not out[-1][1].endswith(" " + s["big"])):
+            out.append((s["start"], f'{CHAPTER_WORDS["letter"].get(lang, "Letter")} {s["big"]}'))
+        elif s["kind"] == "outro":
+            out.append((s["start"], CHAPTER_WORDS["bye"].get(lang, "Bye")))
+    keep = []
+    for t, lab in out:
+        if not keep or t - keep[-1][0] >= 10:
+            keep.append((t, lab))
+        elif len(keep) == 1:
+            keep[0] = (t, lab)
+    if keep:
+        keep[0] = (0.0, keep[0][1])
+    return keep if len(keep) >= 3 else []
+
+
+def thumbnail(scenes, text, path, lang):
+    nuni = ART["nuni"]
+    pick = next((s for s in scenes if s["kind"] == "reveal" and s["stk"]), None) or next((s for s in scenes if s["stk"]), scenes[0])
+    img = bg_frame(pick, 0.0)
+    arr = np.asarray(img).astype(np.float32)
+    yy, xx = np.ogrid[0:H, 0:W]
+    g = np.clip(1 - np.sqrt(((xx - W * 0.68) / (W * 0.4)) ** 2 + ((yy - H * 0.58) / (H * 0.55)) ** 2), 0, 1)[..., None]
+    arr = arr * (1 - 0.45 * g) + 255 * 0.45 * g
+    img = Image.fromarray(arr.astype(np.uint8))
+    if pick["stk"]:
+        st = pick["stk_src"]
+        big = sticker(st, H * 0.62)
+        paste_center(img, big, W * 0.68, H * 0.6)
+    pi = scenes.index(pick)
+    hide = next((s for i, s in enumerate(scenes) if s["kind"] == "hide" and s.get("stk_src") is not None and i != pi - 1), None)
+    if hide is not None:
+        sil = sticker(hide["stk_src"], H * 0.3, silhouette=True)
+        paste_center(img, sil, W * 0.9, H * 0.82)
+        qb = scenes[0]["qbadge"]
+        paste_center(img, qb, W * 0.9 + sil.width * 0.3, H * 0.82 - sil.height * 0.35)
+    nuni.draw(img, W * 0.2, H * 1.02, H * 0.78, 0.0, "happy", 0, 0, -4)
+    L = Letters(lang)
+    line, _ = L.line(text.upper() if lang == "en" else text, 190, W * 0.9)
+    for i, (im, dx) in enumerate(line):
+        paste_center(img, im, W / 2 + dx, H * 0.16 + (math.sin(i * 1.3) * 10))
+    img.resize((1280, 720), Image.LANCZOS).save(path, quality=92)
+    return path
+
+
+def make_short(video, scenes, path, lang, tmp):
+    hides = [i for i, s in enumerate(scenes) if s["kind"] == "hide"]
+    if not hides:
+        return None
+    start = scenes[hides[0]]["start"]
+    end = start + 57
+    for i in hides[:3]:
+        j = i + 1
+        if j < len(scenes) and scenes[j]["kind"] == "reveal":
+            e = scenes[j]["start"] + scenes[j]["nf"] / FPS
+            if e - start <= 58:
+                end = e
+    dur = max(10.0, min(58.0, end - start))
+    ov = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    L = Letters(lang)
+    for text, y, size in ((CHAPTER_WORDS["guess"].get(lang, "?"), 300, 120), (CHAPTER_WORDS["full"].get(lang, ""), 1640, 70)):
+        line, _ = L.line(text, size, 1000)
+        for im, dx in line:
+            paste_center(ov, im, 540 + dx, y)
+    ovp = os.path.join(tmp, "short_overlay.png")
+    ov.save(ovp)
+    fc = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,"
+          "eq=brightness=-0.06[bg];[b]crop=1536:1080:96:0,scale=1080:-2[fg];[bg][fg]overlay=0:(H-h)/2[v];"
+          f"[v][1:v]overlay=0:0,fade=t=out:st={dur - 0.6:.2f}:d=0.6[vo];[0:a]afade=t=out:st={dur - 0.6:.2f}:d=0.6[ao]")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", video, "-i", ovp,
+                    "-filter_complex", fc, "-map", "[vo]", "-map", "[ao]", "-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", "20", "-pix_fmt", "yuv420p", "-r", str(FPS), "-c:a", "aac", "-b:a", "160k",
+                    "-movflags", "+faststart", path], check=True)
+    return path
+
+
 def render(episode, lang, out_path, seed, tmp, bot=None, root=None, key=None, budget=None):
     """Main entry. episode['scenes'][i]['voice'] must already point to a wav (bot.synthesize)."""
     global SCN
@@ -1437,8 +1538,10 @@ def render(episode, lang, out_path, seed, tmp, bot=None, root=None, key=None, bu
     tl = []
     for j, ln in enumerate(lines):
         tl.append((letters.line(ln, 118, W * 0.9)[0], H * (0.13 + 0.15 * j)))
+    teaser = [sticker(s0["stk_src"], H * 0.2, silhouette=True) for s0 in scenes if s0["kind"] == "hide" and s0.get("stk_src") is not None][:6]
     for s in scenes:
         s["title"] = tl
+        s["teaser"] = teaser
     SCN = scenes
     ART.clear()
     ART.update({"nuni": nuni, "tmp": tmp, "prevlast": {}})
@@ -1459,5 +1562,18 @@ def render(episode, lang, out_path, seed, tmp, bot=None, root=None, key=None, bu
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", video], check=True)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", video, "-i", audio, "-map", "0:v", "-map", "1:a",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out_path], check=True)
+    LAST.clear()
+    LAST["chapters"] = chapters(scenes, lang)
+    base = os.path.splitext(out_path)[0]
+    try:
+        hook = (episode.get("thumb_text") or "").strip() or (scenes[1]["caption"] if len(scenes) > 1 and scenes[1]["kind"] == "hide" else title)
+        LAST["thumb"] = thumbnail(scenes, hook[:22], base + "_thumb.jpg", lang)
+    except Exception as e:  # noqa: BLE001
+        log("thumbnail failed:", e)
+    try:
+        LAST["short"] = make_short(out_path, scenes, base + "_short.mp4", lang, tmp)
+    except Exception as e:  # noqa: BLE001
+        log("short failed:", e)
     log(f"Rendered {out_path}: {len(scenes)} scenes, {total:.0f}s (studio v3, {time.time() - t_start:.0f}s total)")
+    log("Extras:", json.dumps({k: (v if k != "chapters" else len(v)) for k, v in LAST.items()}))
     return total
