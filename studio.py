@@ -1089,7 +1089,7 @@ def plan(episode, lang):
         if kind == "outro" and not cap:
             cap = TEXTS["bye"].get(lang, "")
         out.append({"i": i, "kind": kind, "bg": bg, "place": place, "items": items, "clues": clues, "caption": cap,
-                    "big": (sd.get("big") or "").strip()[:2], "say": sd.get("say", ""), "voice": sd.get("voice")})
+                    "big": "" if (sd.get("big") or "").strip() in ("?", "❓") else (sd.get("big") or "").strip()[:2], "say": sd.get("say", ""), "voice": sd.get("voice")})
     return out
 
 
