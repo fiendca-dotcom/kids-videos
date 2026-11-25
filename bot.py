@@ -44,7 +44,8 @@ CONFIG = {
     "width": 1280,
     "height": 720,
     "fps": 24,
-    "renderer": "studio",  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
+    "renderer": "studio",
+    "shorts_upload": False,  # True = also upload the automatic ~55 s vertical Short of every episode  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
     "art_budget_s": 1500,  # max seconds per video spent creating new pictures (they are cached in assets/lib)
     "text_model": "gemini-2.5-flash",
     "tts_models": ["gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"],
@@ -254,8 +255,12 @@ Rules:
 - Total 22-36 scenes. Safe, kind, no scary or violent content, no brands or known characters.
 - Make it different from these past episodes: {past_titles[-12:]}
 - 'title' = catchy YouTube title in {L['name']} (max 70 chars) that mentions {L['mascot']}.
+- 'description' = 2-3 warm sentences for parents (in {L['name']}) for the YouTube description, naturally using search keywords.
+- 'tags' = 8-12 search tags. 'short_title' = catchy title (max 60 chars) for a 50-second Short made from the first part.
+- If the notes above give a THEME, a title idea and an opening hook: build the whole episode around that theme and open with that hook.
 Return JSON: {{"title": str, "scenes": [{{"say": str, "show": [str], "art": [str], "clues": [str], "caption": str,
-"big": str, "bg": str, "place": str, "hide": bool, "reveal": bool, "intro": bool, "outro": bool}}]}}"""
+"big": str, "bg": str, "place": str, "hide": bool, "reveal": bool, "intro": bool, "outro": bool}}],
+"description": str, "tags": [str], "short_title": str}}"""
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0}}
     for attempt, model in enumerate(text_models(key)[:5]):
@@ -976,12 +981,20 @@ def render_video(episode, lang, out_path, seed, tmp):
 def plan_episode(lang, fmt, ep, state):
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     past = [h["title"] for h in state.get("history", []) if h.get("lang") == lang]
+    strat = {}
+    if key:
+        try:
+            import growth
+            strat = growth.plan(lang, fmt, ep, state, key, sys.modules[__name__]) or {}
+        except Exception as e:  # noqa: BLE001
+            print("Strategy step failed:", e, flush=True)
+    fmt = strat.get("format") or fmt
     letters = []
     if fmt == "letters":
         alpha = LANG[lang]["alphabet"]
         pos = state.setdefault("letter_pos", {}).get(lang, 0) % len(alpha)
         letters = alpha[pos:pos + 4] or alpha[:4]
-    trends = youtube_trends()
+    trends = (strat.get("brief") or "") + youtube_trends()
     data = gemini_script(lang, fmt, ep, past, letters, key, trends) if key else None
     if not data:
         print(f"Using offline fallback script for {lang}")
@@ -989,6 +1002,9 @@ def plan_episode(lang, fmt, ep, state):
         fmt = "animals"
     elif fmt == "letters":
         state["letter_pos"][lang] = (state["letter_pos"].get(lang, 0) + len(letters)) % len(LANG[lang]["alphabet"])
+    for k in ("keywords", "thumb_text", "theme"):
+        if strat.get(k) and not data.get(k):
+            data[k] = strat[k]
     return data, fmt
 
 
@@ -1000,7 +1016,22 @@ def make_video(lang, fmt, ep, state, out_path):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     title = data.get("title") or FALLBACK_TEXT[lang]["title"]
-    return {"title": title[:100], "description": LANG[lang]["desc"], "tags": LANG[lang]["tags"], "format": fmt}
+    extras = {}
+    try:
+        import studio
+        extras = dict(studio.LAST)
+    except Exception:  # noqa: BLE001
+        pass
+    desc, tags = LANG[lang]["desc"], LANG[lang]["tags"]
+    try:
+        import growth
+        desc, tags = growth.description(data, lang, sys.modules[__name__], extras.get("chapters"))
+    except Exception as e:  # noqa: BLE001
+        print("SEO step failed:", e, flush=True)
+    print("Description:\n" + desc, flush=True)
+    return {"title": title[:100], "description": desc, "tags": tags, "format": fmt, "theme": data.get("theme", ""),
+            "thumb": extras.get("thumb"), "short": extras.get("short"),
+            "short_title": (data.get("short_title") or title.split("|")[0].strip())[:88] + " #shorts"}
 
 
 # ----------------------------------------------------------------- upload
@@ -1014,7 +1045,7 @@ def _refresh_token(lang=None):
     return raw
 
 
-def upload(path, title, description, tags, language, privacy="public", category_id="27"):
+def upload(path, title, description, tags, language, privacy="public", category_id="27", thumb=None):
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
@@ -1041,6 +1072,12 @@ def upload(path, title, description, tags, language, privacy="public", category_
                 continue
             raise
     print(f"Done: https://youtu.be/{response['id']} (privacy: {response['status']['privacyStatus']})")
+    if thumb and os.path.exists(thumb):
+        try:
+            yt.thumbnails().set(videoId=response["id"], media_body=MediaFileUpload(thumb, mimetype="image/jpeg")).execute()
+            print("Thumbnail set", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("Thumbnail not set (custom thumbnails need a phone-verified channel):", str(e)[:200], flush=True)
     return response["id"]
 
 
@@ -1061,9 +1098,17 @@ def main():
         if dry:
             continue
         vid = upload(str(out), meta["title"], meta["description"], meta["tags"], lang,
-                     CONFIG["privacy"], CONFIG["category_id"])
+                     CONFIG["privacy"], CONFIG["category_id"], thumb=meta.get("thumb"))
         state["history"].append({"episode": ep, "lang": lang, "format": meta["format"], "video_id": vid,
-                                 "title": meta["title"], "date": datetime.date.today().isoformat()})
+                                 "title": meta["title"], "theme": meta.get("theme", ""),
+                                 "date": datetime.date.today().isoformat()})
+        if CONFIG.get("shorts_upload") and meta.get("short") and os.path.exists(meta["short"]):
+            try:
+                sid = upload(meta["short"], meta["short_title"], meta["description"], meta["tags"], lang,
+                             CONFIG["privacy"], CONFIG["category_id"])
+                state["history"][-1]["short_id"] = sid
+            except Exception as e:  # noqa: BLE001
+                print("Short upload failed:", e, flush=True)
     if not dry:
         state["episode"] = ep
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
