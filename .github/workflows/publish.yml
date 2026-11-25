@@ -26,7 +26,7 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-dreamshaper8-lcm-v1
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install Pillow numpy scipy edge-tts google-api-python-client google-auth diffusers transformers accelerate peft safetensors
+      - run: pip install Pillow numpy scipy edge-tts google-api-python-client google-auth diffusers transformers accelerate peft safetensors opencv-python-headless
       - if: ${{ github.event_name == 'workflow_dispatch' && inputs.test }}
         run: |
           python bot.py --dry-run
