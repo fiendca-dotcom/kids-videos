@@ -162,7 +162,7 @@ Return JSON: {{"format": str, "theme": str, "title": str, "keywords": [str], "ho
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.9}}
     for model in bot.text_models(key)[:3]:
         try:
-            r = bot.gemini_call(model, body, key, timeout=180)
+            r = bot.gemini_call(model, body, key, timeout=90)
             data = json.loads(r["candidates"][0]["content"]["parts"][0]["text"])
             if isinstance(data, list):
                 data = data[0]
