@@ -1,5 +1,5 @@
 {
-  "episode": 2,
+  "episode": 3,
   "history": [
     {
       "episode": 1,
@@ -32,6 +32,16 @@
       "video_id": "09SDZOeQrdg",
       "title": "Who Makes This Sound? | Animal Sounds for Kids with Nuni",
       "date": "2026-11-24"
+    },
+    {
+      "episode": 3,
+      "lang": "en",
+      "format": "riddles",
+      "video_id": "48ktDZV8RT4",
+      "title": "Who is Hiding in the Snow? | Winter Riddles for Kids with Nuni",
+      "theme": "Winter Snow and Cold Weather Fun",
+      "date": "2026-11-26",
+      "short_id": "gkVhnGaEQNY"
     }
   ]
 }
