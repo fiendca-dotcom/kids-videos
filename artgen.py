@@ -142,16 +142,26 @@ HINTS = {
 }
 
 
+# white subjects vanish on a white backdrop - paint those on soft blue so the cutter sees their edge
+WHITE = set("""snowman snowflake polar sheep lamb seal swan cloud bunny rabbit arctic milk ghost egg goat igloo
+marshmallow dove unicorn ice skate skates iceberg tooth toothbrush""".split())
+
+
+def backdrop(name):
+    return ("plain flat soft sky-blue background" if any(w in WHITE for w in name.lower().split())
+            else "plain flat pure white background")
+
+
 def item_prompt(name):
     desc = HINTS.get(name)
     if desc is None:  # "cute penguin standing on ice" -> hint of its main word
         key = next((w for w in reversed(name.split()) if w in HINTS), None)
         desc = name if key is None else f"{name}, {HINTS[key]}"
     if name in ANIMALS or any(w in ANIMALS for w in name.split()):
-        return f"one cute baby {desc}, full body, centered, isolated on plain white background, {STYLE}"
+        return f"one cute baby {desc}, full body, whole body visible, centered, isolated on {backdrop(name)}, no shadow, {STYLE}"
     if "snowman" in name:
-        return f"one {desc}, full body from head to base, centered, isolated on plain white background, {STYLE}"
-    return f"one {desc}, centered, isolated on plain white background, {OBJ_MARK}, {STYLE_OBJ}"
+        return f"one {desc}, full body from head to base, centered, isolated on {backdrop(name)}, no shadow, {STYLE}"
+    return f"one {desc}, whole object visible, centered, isolated on {backdrop(name)}, no shadow, {OBJ_MARK}, {STYLE_OBJ}"
 
 
 def bg_prompt(place):
@@ -200,37 +210,49 @@ def release():
     gc.collect()
 
 
-def demo(out="out/art_demo"):
-    from PIL import Image, ImageDraw
+DEMO = ["polar bear", "snowman", "penguin", "sled", "hot cocoa", "christmas tree", "frog", "donkey", "snowflake",
+        "reindeer"]
+
+
+def demo(out="out/art_demo", names=None):
+    """The real episode path (generate -> AI cut-out -> quality gates -> sticker / silhouette) for 10 subjects
+    that came out broken before. Writes each picture and one contact sheet."""
+    import tempfile
+    from PIL import Image
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import studio
+    names = names or DEMO
     os.makedirs(out, exist_ok=True)
-    items = ["penguin", "snowman", "duckling", "red fire truck"]
-    places = ["snowy winter forest"]
-    tiles = []
-    for i, nm in enumerate(items):
+    lib = studio.ArtLib(tempfile.mkdtemp(), "", 10 ** 6)
+    lib.models, lib.poll_on = [], False
+    bg = Image.open(sorted(lib_bgs())[0]).convert("RGB") if lib_bgs() else None
+    T = 520
+    sheet = Image.new("RGB", (5 * T, 2 * (T + 220)), (245, 240, 230))
+    for k, nm in enumerate(names):
         t0 = time.time()
-        im = generate(item_prompt(nm), 512, 512, 1000 + i)
-        im.save(f"{out}/item_{i}.png")
-        cut = studio.cutout(im)
-        log(f"item '{nm}': {time.time() - t0:.0f}s, cutout {'ok' if cut is not None else 'FAILED'}, "
-            f"quality gate {'ok' if matches(im, nm) else 'REJECTED'}")
-        st = studio.sticker(cut, 420) if cut is not None else im.convert("RGBA").resize((420, 420))
-        bgc = Image.new("RGB", (520, 520), (90, 170, 90))
-        st.thumbnail((500, 500))
-        bgc.paste(st, (10, 10), st)
-        tiles.append(bgc)
-    for i, pl in enumerate(places):
-        t0 = time.time()
-        im = generate(bg_prompt(pl), 912, 512, 2000 + i)
-        im.save(f"{out}/bg_{i}.png")
-        log(f"background '{pl}': {time.time() - t0:.0f}s")
-        tiles.append(im.resize((520, 292)).crop((0, 0, 520, 292)))
-    sheet = Image.new("RGB", (4 * 520, 4 * 520), (30, 30, 30))
-    for k, t in enumerate(tiles):
-        sheet.paste(t, ((k % 4) * 520, (k // 4) * 520))
-    sheet.save(f"{out}/sheet.jpg", quality=88)
+        cut = lib.item(nm, exact=True)
+        log(f"item '{nm}': {'ok' if cut is not None else 'FAILED'} ({time.time() - t0:.0f}s)")
+        tile = (bg.resize((T * 16 // 9, T)).crop((T * 7 // 18, 0, T * 7 // 18 + T, T)) if bg
+                else Image.new("RGB", (T, T), (120, 170, 210)))
+        low = Image.new("RGB", (T, 220), (245, 240, 230))
+        if cut is not None:
+            cut.save(f"{out}/{k + 1:02d}_{nm.replace(' ', '_')}.png")
+            st = studio.sticker(cut, int(T * 0.78))
+            st.thumbnail((T - 10, T - 10))
+            tile.paste(st, ((T - st.width) // 2, (T - st.height) // 2), st)
+            sil = studio.sticker(cut, 190, silhouette=True)
+            sil.thumbnail((210, 210))
+            low.paste(sil, ((T - sil.width) // 2, (220 - sil.height) // 2), sil)
+        x, y = (k % 5) * T, (k // 5) * (T + 220)
+        sheet.paste(tile, (x, y))
+        sheet.paste(low, (x, y + T))
+    sheet.save(f"{out}/sheet.jpg", quality=90)
     log("demo sheet:", f"{out}/sheet.jpg")
+
+
+def lib_bgs():
+    import glob
+    return glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets/lib/bg/*.jpg"))
 
 
 if __name__ == "__main__":

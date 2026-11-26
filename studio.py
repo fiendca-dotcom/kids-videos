@@ -141,6 +141,13 @@ def cutout_grab(img):
     return res.crop(bb) if bb else None
 
 
+def on_grey(rgba):
+    """Cut-out on a neutral backdrop - what the quality gate looks at (the subject as it will appear)."""
+    bg = Image.new("RGB", (rgba.width + 40, rgba.height + 40), (150, 150, 150))
+    bg.paste(rgba, (20, 20), rgba)
+    return bg
+
+
 def boxy(rgba):
     """True if a cut-out still carries a rectangle of backdrop (its outer frame is mostly opaque)."""
     al = np.asarray(rgba.split()[3]) > 128
@@ -150,12 +157,77 @@ def boxy(rgba):
     return sum(v > 0.5 for v in sides) >= 3 or float(np.mean(sides)) > 0.55
 
 
+_RB = {}
+
+
+def cutout_ai(img):
+    """AI background removal (rembg, IS-Net general model, Apache-2.0). Much cleaner than colour keying:
+    keeps white fur / white snow objects and drops floor shadows. None if rembg is not installed."""
+    try:
+        from rembg import new_session, remove
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        if "s" not in _RB:
+            _RB["s"] = new_session(os.environ.get("REMBG_MODEL", "isnet-general-use"))
+        im = img.convert("RGB")
+        im.thumbnail((1024, 1024), Image.LANCZOS)
+        m = remove(im, session=_RB["s"], only_mask=True, post_process_mask=True)
+        m = np.asarray(m.convert("L")).astype(np.float32) / 255.0
+    except Exception as e:  # noqa: BLE001
+        log("  AI cutout failed:", str(e)[:160])
+        return None
+    solid = m > 0.5
+    if ndimage is not None:
+        lab, n = ndimage.label(solid)
+        if n == 0:
+            return None
+        sizes = ndimage.sum(solid, lab, range(1, n + 1))
+        keep = np.isin(lab, 1 + np.where(sizes >= sizes.max() * 0.15)[0])
+        keep = ndimage.binary_dilation(keep, iterations=2)
+        m = m * keep
+    res = Image.fromarray(np.dstack([np.asarray(im), (np.clip(m, 0, 1) * 255).astype(np.uint8)]), "RGBA")
+    bb = res.split()[3].point(lambda v: 255 if v > 20 else 0).getbbox()
+    return res.crop(bb) if bb else None
+
+
+def cut_problem(rgba, src_size=None):
+    """Why a cut-out is not good enough for a video (None = fine). Catches torn subjects, leftover backdrop
+    blobs, rectangles of backdrop and subjects cut off by the picture edge."""
+    if rgba is None:
+        return "no cut-out"
+    al = np.asarray(rgba.split()[3]) > 128
+    if al.sum() < 400:
+        return "almost empty"
+    if boxy(rgba):
+        return "backdrop rectangle left"
+    if ndimage is not None:
+        lab, n = ndimage.label(al)
+        sizes = ndimage.sum(al, lab, range(1, n + 1))
+        if sizes.max() < 0.90 * al.sum():
+            return f"broken into pieces ({int((sizes > 0.003 * al.sum()).sum())})"
+        filled = ndimage.binary_fill_holes(al)
+        if (filled & ~al).sum() > 0.10 * filled.sum():
+            return "big holes"
+    fill = al.mean()
+    if fill < 0.12:
+        return "thin / scattered shape"
+    return None
+
+
 def cutout(img):
-    """Object painted on a white background -> RGBA cut-out (None if it does not look clean)."""
+    """Object painted on a plain background -> RGBA cut-out (None if it does not look clean)."""
     if ndimage is None:
         return None
+    ai = cutout_ai(img)
+    if ai is not None:
+        why = cut_problem(ai)
+        if why is None:
+            return ai
+        log("  AI cut-out rejected:", why)
+        return None
     g = cutout_grab(img)
-    if g is not None and not boxy(g):
+    if g is not None and cut_problem(g) is None:
         return g
     im = img.convert("RGB")
     im.thumbnail((900, 900), Image.LANCZOS)
@@ -186,7 +258,7 @@ def cutout(img):
     res = Image.fromarray(out, "RGBA")
     bb = res.getbbox()
     res = res.crop(bb) if bb else None
-    return None if res is None or boxy(res) else res
+    return None if res is None or cut_problem(res) else res
 
 
 _EMOJI = {}
@@ -240,7 +312,11 @@ def sticker(rgba, size, silhouette=False):
     base = Image.fromarray(np.clip(layer, 0, 255).astype(np.uint8), "RGBA")
     if silhouette:
         fill = Image.new("RGBA", im.size, (58, 48, 128, 255))
-        fill.putalpha(im.split()[3])
+        a = im.split()[3]
+        if ndimage is not None:
+            solid = ndimage.binary_fill_holes(np.asarray(a) > 128)
+            a = Image.fromarray(np.maximum(np.asarray(a), (ndimage.gaussian_filter(solid.astype(np.float32), 0.8) * 255).astype(np.uint8)))
+        fill.putalpha(a)
         im = fill
     base.alpha_composite(im, (pad, pad))
     return base
@@ -429,9 +505,9 @@ class ArtLib:
                 best, score = f, sc
         return best if score >= 2 else None
 
-    def item(self, name, exact=False):
+    def item(self, name, exact=False, redo=False):
         path = self.dir / "items" / f"{slug(name)}.webp"
-        if path.exists():
+        if path.exists() and not redo:
             self.stats["cache"] += 1
             return Image.open(path).convert("RGBA")
         fuzzy = None if exact else self.find_item(name)
@@ -451,11 +527,12 @@ class ArtLib:
             if im is None:
                 break
             cut = cutout(im)
-            if cut is not None and src == "local" and attempt < 2 and not self.artgen.matches(im, name):
+            if cut is not None and src == "local" and attempt < 2 and not self.artgen.matches(on_grey(cut), name):
                 continue  # does not look like the subject: try another seed
             if cut is not None:
                 cut.thumbnail((720, 720), Image.LANCZOS)
                 cut.save(path, "WEBP", quality=90)
+                mark_v2(self.dir, path.stem)
                 log(f"  + item '{name}' ({src})")
                 return cut
             log(f"  item '{name}': background not clean, retrying")
@@ -464,6 +541,17 @@ class ArtLib:
             return Image.open(fuzzy).convert("RGBA")
         self.stats["none"] += 1
         return None
+
+
+def v2_items(libdir):
+    """Items cut with the AI cutter (pictures made before it often carry a patch of backdrop)."""
+    f = Path(libdir) / "items_v2.txt"
+    return set(f.read_text().split()) if f.exists() else set()
+
+
+def mark_v2(libdir, stem):
+    done = v2_items(libdir) | {stem}
+    (Path(libdir) / "items_v2.txt").write_text("\n".join(sorted(done)) + "\n")
 
 
 def library_names(root):
