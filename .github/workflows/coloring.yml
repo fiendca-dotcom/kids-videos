@@ -1,0 +1,29 @@
+name: coloring-book
+on:
+  workflow_dispatch:
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-dreamshaper-xl-v1
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install Pillow numpy scipy diffusers transformers accelerate peft safetensors opencv-python-headless
+      - run: |
+          if [ "${{ matrix.shard }}" = "8" ]; then python coloring.py --cover; else python coloring.py --shard=${{ matrix.shard }}/8; fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coloring-${{ matrix.shard }}
+          path: out/coloring/*
