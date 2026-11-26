@@ -440,7 +440,9 @@ class ArtLib:
             return Image.open(fuzzy).convert("RGBA")
         prompt = (f"{STYLE}. One single {name}, cute and friendly, the whole thing fully visible and centred, "
                   "isolated on a plain pure white background. No shadow, no ground, no frame, no text, nothing else.")
-        for attempt in range(2):
+        for attempt in range(3):
+            if attempt and self.artgen is not None and self.left() < 200:
+                break
             seed = sum(map(ord, name)) * 17 + attempt * 101
             im = self._local(self.artgen.item_prompt(name), 512, 512, seed) if self.artgen else None
             src = "local"
@@ -449,6 +451,8 @@ class ArtLib:
             if im is None:
                 break
             cut = cutout(im)
+            if cut is not None and src == "local" and attempt < 2 and not self.artgen.matches(im, name):
+                continue  # does not look like the subject: try another seed
             if cut is not None:
                 cut.thumbnail((720, 720), Image.LANCZOS)
                 cut.save(path, "WEBP", quality=90)
