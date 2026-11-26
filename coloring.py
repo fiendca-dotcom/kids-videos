@@ -66,13 +66,13 @@ PAGES = [
     "a cute little mermaid wearing a seashell top blowing bubbles with a smiling starfish and a little fish",
     "a cute little mermaid wearing a seashell top playing with a friendly octopus",
     "a cute little mermaid wearing a seashell top riding a seahorse",
-    "a cute little mermaid with a fish tail wearing a seashell top sitting on a rock at the beach next to a smiling crab",
+    "a cute chibi mermaid girl with a long fish tail wearing a seashell top swimming next to a smiling crab and big seashells",
     "a cute little mermaid wearing a seashell top reading a book in an underwater garden",
     "a cute little mermaid wearing a seashell top waving from inside a giant seashell",
     "a cute little mermaid wearing a seashell top and a baby whale blowing bubbles",
     "a cute little mermaid wearing a seashell top finding a treasure chest with jewels",
     "a cute little mermaid wearing a seashell top with a starfish crown and jellyfish friends",
-    "a cute little mermaid with a fish tail wearing a seashell top sitting on a rock looking at the moon, simple waves",
+    "a cute chibi mermaid girl with a long fish tail wearing a seashell top swimming under a big round moon with bubbles and stars",
     "a cute little mermaid wearing a seashell top and a puffer fish making music with shells",
 ]
 
@@ -106,6 +106,7 @@ def clean(im):
 
 def page(i, attempt):
     prompt = f"{PAGES[i]}, {LINE}"
+    neg = NEG + (", legs, feet, knees, toes, human legs" if "mermaid" in PAGES[i] else "")
     old = artgen.NEG
     artgen.NEG = NEG
     try:
@@ -115,7 +116,7 @@ def page(i, attempt):
             import torch
             g = torch.Generator("cpu").manual_seed(5000 + i * 37 + attempt * 991)
             with torch.inference_mode():
-                return artgen.pipe()(prompt=prompt, negative_prompt=NEG, width=768, height=1024,
+                return artgen.pipe()(prompt=prompt, negative_prompt=neg, width=768, height=1024,
                                      num_inference_steps=5, guidance_scale=1.4, generator=g).images[0]
         return artgen.generate(prompt, 768, 1024, 5000 + i * 37 + attempt * 991)
     finally:
