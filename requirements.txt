@@ -1,0 +1,13 @@
+# Install torch first (CPU build):  pip install torch --index-url https://download.pytorch.org/whl/cpu
+Pillow
+numpy
+scipy
+edge-tts
+google-api-python-client
+google-auth
+diffusers
+transformers
+accelerate
+peft
+safetensors
+opencv-python-headless
