@@ -21,10 +21,14 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-dreamshaper-xl-v1
+      - uses: actions/cache@v4
+        with:
+          path: ~/.rembg
+          key: rembg-isnet-v2
       - name: Install
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install Pillow numpy scipy diffusers transformers accelerate peft safetensors opencv-python-headless
+          pip install Pillow numpy scipy diffusers transformers accelerate peft safetensors opencv-python-headless rembg onnxruntime
       - name: Build picture library
         env:
           ART_XL: "1"

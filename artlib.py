@@ -50,7 +50,14 @@ def main():
     lib = studio.ArtLib(ROOT, "", budget)
     lib.models, lib.poll_on = [], False  # local model only
     t0 = time.time()
-    todo_i = [s for s in SUBJECTS if not (lib.dir / "items" / f"{studio.slug(s)}.webp").exists()]
+    done_v2 = studio.v2_items(lib.dir)
+    have = {f.stem for f in (lib.dir / "items").glob("*.webp")}
+    todo_i = [s for s in SUBJECTS if studio.slug(s) not in have]
+    # pictures cut with the old colour-key cutter carry backdrop patches: remake them (old file stays until replaced)
+    redo = [s for s in SUBJECTS if studio.slug(s) in have and studio.slug(s) not in done_v2]
+    redo += sorted(st.replace("-", " ") for st in have - done_v2 - {studio.slug(s) for s in SUBJECTS})
+    print(f"{len(redo)} old pictures will be remade with the AI cutter", flush=True)
+    todo_i = redo + todo_i
     todo_b = [p for p in PLACES if not (lib.dir / "bg" / f"{studio.slug(p)}.jpg").exists()]
     print(f"Library: {len(SUBJECTS) - len(todo_i)}/{len(SUBJECTS)} subjects, "
           f"{len(PLACES) - len(todo_b)}/{len(PLACES)} places", flush=True)
@@ -66,7 +73,7 @@ def main():
         if time.time() - t0 > budget - 300:
             break
         t1 = time.time()
-        r = lib.item(name, exact=True) if kind == "item" else lib.background(name, exact=True)
+        r = lib.item(name, exact=True, redo=True) if kind == "item" else lib.background(name, exact=True)
         made += r is not None
         print(f"  {kind} '{name}': {'ok' if r is not None else 'failed'} ({time.time() - t1:.0f}s)", flush=True)
     print(f"Made {made} pictures in {time.time() - t0:.0f}s", flush=True)
