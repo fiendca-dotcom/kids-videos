@@ -20,7 +20,7 @@ LINE = ("coloring book page for kids, black and white line art, thick clean bold
         "no gray, white background, cute cartoon, simple shapes, big areas to color")
 NEG = ("color, colored, shading, grayscale, gradient, shadow, hatching, texture, dark fill, solid black areas, "
        "text, letters, words, watermark, signature, frame, border, photo, realistic, blurry, scary, ugly, "
-       "deformed, extra limbs, bad anatomy, nsfw, pig")
+       "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig")
 
 PAGES = [
     # princesses
@@ -58,22 +58,22 @@ PAGES = [
     "a cute unicorn looking into a magic mirror with sparkles",
     "a cute unicorn sitting on a crescent moon with stars",
     # mermaids
-    "a cute little mermaid sitting on a rock in the sea with waves and seagulls",
-    "a cute little mermaid swimming with a happy dolphin",
-    "a cute little mermaid and a sea turtle exploring a coral reef",
+    "a cute little mermaid wearing a seashell top sitting on a rock in the sea with waves and seagulls",
+    "a cute little mermaid wearing a seashell top swimming with a happy dolphin",
+    "a cute little mermaid wearing a seashell top and a sea turtle exploring a coral reef",
     "an underwater castle made of shells and coral with little fish",
-    "a cute little mermaid combing her long hair with a seashell comb",
-    "a cute little mermaid holding a big pearl in an open clam shell",
-    "a cute little mermaid playing with a friendly octopus",
-    "a cute little mermaid riding a seahorse",
-    "a cute little mermaid and a crab having a picnic on the beach",
-    "a cute little mermaid reading a book in an underwater garden",
-    "a cute little mermaid waving from inside a giant seashell",
-    "a cute little mermaid and a baby whale blowing bubbles",
-    "a cute little mermaid finding a treasure chest with jewels",
-    "a cute little mermaid with a starfish crown and jellyfish friends",
-    "a cute little mermaid looking at the moon from the sea at night",
-    "a cute little mermaid and a puffer fish making music with shells",
+    "a cute little mermaid wearing a seashell top combing her long hair with a seashell comb",
+    "a cute little mermaid wearing a seashell top holding a big pearl in an open clam shell",
+    "a cute little mermaid wearing a seashell top playing with a friendly octopus",
+    "a cute little mermaid wearing a seashell top riding a seahorse",
+    "a cute little mermaid wearing a seashell top and a crab having a picnic on the beach",
+    "a cute little mermaid wearing a seashell top reading a book in an underwater garden",
+    "a cute little mermaid wearing a seashell top waving from inside a giant seashell",
+    "a cute little mermaid wearing a seashell top and a baby whale blowing bubbles",
+    "a cute little mermaid wearing a seashell top finding a treasure chest with jewels",
+    "a cute little mermaid wearing a seashell top with a starfish crown and jellyfish friends",
+    "a cute little mermaid wearing a seashell top looking at the moon from the sea at night",
+    "a cute little mermaid wearing a seashell top and a puffer fish making music with shells",
 ]
 
 
@@ -126,11 +126,12 @@ def main():
     os.environ.setdefault("ART_XL", "1")
     os.makedirs(OUT, exist_ok=True)
     if "--cover" in sys.argv:
+        artgen.NEG = artgen.NEG + ", legs, feet, nude, topless"
         for k, (name, p) in enumerate([
             ("cover_unicorn", "a cute baby unicorn with rainbow mane, isolated on plain white background"),
-            ("cover_mermaid", "a cute little mermaid girl with short curly blonde hair, a lavender purple tail and a "
+            ("cover_mermaid", "a cute little mermaid wearing a seashell top girl with short curly blonde hair, a lavender purple tail and a "
              "starfish hairclip, full body, waving, isolated on plain white background"),
-            ("cover_princess", "a cute little girl princess in a lavender ball gown with a small silver tiara, full body "
+            ("cover_princess", "a cute little girl princess with black curly hair in a mint green ball gown with a flower crown, full body "
              "from head to shoes, standing and smiling, isolated on plain white background"),
             ("cover_castle", "a small whimsical pastel cottage castle with round towers and heart shaped windows on a "
              "green hill, wide scene, sunny sky"),
