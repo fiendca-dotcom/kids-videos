@@ -22,7 +22,7 @@ SUBJECTS = [
     "fish", "whale", "dolphin", "octopus", "crab", "starfish", "seal", "jellyfish", "seahorse", "shark",
     "apple", "banana", "strawberry", "orange", "grapes", "watermelon", "pear", "cherry", "pineapple", "lemon",
     "carrot", "pumpkin", "tomato", "corn", "broccoli", "peas", "mushroom",
-    "red toy train", "yellow school bus", "red fire truck", "police car", "airplane", "rocket", "sailboat",
+    "wooden toy train", "yellow school bus", "red fire truck", "police car", "airplane", "rocket", "sailboat",
     "tractor", "bicycle", "hot air balloon", "helicopter", "submarine", "race car", "dump truck",
     "teddy bear", "ball", "kite", "umbrella", "balloon", "star", "moon", "sun", "cloud", "rainbow",
     "cupcake", "birthday cake", "ice cream cone", "honey pot", "cookie", "pizza", "milk bottle",
