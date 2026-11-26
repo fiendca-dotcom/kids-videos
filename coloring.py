@@ -55,7 +55,7 @@ PAGES = [
     "a cute unicorn splashing in a pond with lily pads and a frog",
     "a cute unicorn in the snow building a snowman",
     "a cute unicorn with a big bow sitting among cupcakes and candy",
-    "a cute unicorn looking into a magic mirror with sparkles",
+    "a cute unicorn with one horn blowing dandelion seeds in a sunny meadow",
     "a cute unicorn sitting on a crescent moon with stars",
     # mermaids
     "a cute little mermaid wearing a seashell top sitting on a rock in the sea with waves and seagulls",
