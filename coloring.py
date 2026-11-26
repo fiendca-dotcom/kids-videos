@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import artgen  # noqa: E402
 
 OUT = "out/coloring"
-LINE = ("kids coloring book page, cute chibi pixar style character design, big sparkly eyes, round soft shapes, "
+LINE = ("coloring page line art, cute chibi pixar style character design, big sparkly eyes, round soft shapes, "
         "black and white line art, thick clean bold outlines, no shading, no gray, white background, "
         "simple uncluttered background, big areas to color")
 NEG = ("color, colored, shading, grayscale, gradient, shadow, hatching, texture, dark fill, solid black areas, "
        "text, letters, words, watermark, signature, frame, border, photo, realistic, blurry, scary, ugly, "
-       "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig, two horns, multiple horns, 3d render, colorful")
+       "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig, pencils, crayons, markers, pens, paper sheet, two horns, multiple horns, 3d render, colorful")
 
 PAGES = [
     # princesses
@@ -176,7 +176,7 @@ def one(i):
         import pixarline
         return pixarline.one(i, PAGES[i], OUT)
     cands = []
-    for attempt in range(4):
+    for attempt in range(3):
         t0 = time.time()
         raw = page(i, attempt)
         bw, _ = clean(raw)
