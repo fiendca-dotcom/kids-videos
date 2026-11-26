@@ -30,6 +30,8 @@ STYLE = "pixar style 3d render, disney pixar animation, adorable, big expressive
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
        "weapon, photo, photorealistic, pig, piglet, shadow, floor, ground, reflection, glow")
+STYLE_OBJ = "pixar style 3d render, smooth clean toy-like shapes, soft warm light, vibrant colours, highly detailed"
+OBJ_MARK = "simple cute 3d cartoon object"
 _P = None
 
 
@@ -56,7 +58,7 @@ def pipe():
     if _P is None and big_machine():
         try:
             import torch
-            from diffusers import DPMSolverMultistepScheduler, StableDiffusionXLPipeline
+            from diffusers import EulerDiscreteScheduler, StableDiffusionXLPipeline
             torch.set_num_threads(os.cpu_count() or 4)
             t0 = time.time()
             kw = dict(torch_dtype=torch.float32)
@@ -64,8 +66,9 @@ def pipe():
                 p = StableDiffusionXLPipeline.from_pretrained(XL_MODEL, variant="fp16", **kw)
             except Exception:  # noqa: BLE001
                 p = StableDiffusionXLPipeline.from_pretrained(XL_MODEL, **kw)
-            p.scheduler = DPMSolverMultistepScheduler.from_config(
-                p.scheduler.config, algorithm_type="sde-dpmsolver++", use_karras_sigmas=True)
+            # Lightning models are distilled for Euler with "trailing" timesteps and low guidance;
+            # other samplers / higher guidance give burnt colours and halos
+            p.scheduler = EulerDiscreteScheduler.from_config(p.scheduler.config, timestep_spacing="trailing")
             try:  # tiny VAE: decoding a 1 MP picture on CPU drops from ~60 s to ~2 s
                 from diffusers import AutoencoderTiny
                 p.vae = AutoencoderTiny.from_pretrained("madebyollin/taesdxl", torch_dtype=torch.float32)
@@ -105,8 +108,9 @@ def generate(prompt, w, h, seed, steps=4, guidance=1.3):
         if XL:  # SDXL works natively around 1 megapixel; objects are cut out and shown <= 600 px
             k = ((832 * 832 if w == h else 1024 * 1024) / (w * h)) ** 0.5
             W, H = int(w * k) // 64 * 64, int(h * k) // 64 * 64
-            return p(prompt=prompt, negative_prompt=NEG, width=W, height=H, num_inference_steps=4,
-                     guidance_scale=2.0, generator=g).images[0]
+            neg = NEG + (", face, eyes, mouth, cartoon face" if OBJ_MARK in prompt else "")
+            return p(prompt=prompt, negative_prompt=neg, width=W, height=H, num_inference_steps=5,
+                     guidance_scale=1.4, generator=g).images[0]
         return p(prompt=prompt, negative_prompt=NEG, width=w, height=h, num_inference_steps=steps,
                  guidance_scale=guidance, generator=g).images[0]
 
@@ -145,7 +149,9 @@ def item_prompt(name):
         desc = name if key is None else f"{name}, {HINTS[key]}"
     if name in ANIMALS or any(w in ANIMALS for w in name.split()):
         return f"one cute baby {desc}, full body, centered, isolated on plain white background, {STYLE}"
-    return f"one {desc}, centered, isolated on plain white background, simple cute 3d cartoon object, {STYLE}"
+    if "snowman" in name:
+        return f"one {desc}, centered, isolated on plain white background, {STYLE}"
+    return f"one {desc}, centered, isolated on plain white background, {OBJ_MARK}, {STYLE_OBJ}"
 
 
 def bg_prompt(place):
@@ -165,7 +171,7 @@ def demo(out="out/art_demo"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import studio
     os.makedirs(out, exist_ok=True)
-    items = ["penguin", "snowman", "duckling", "red toy train"]
+    items = ["penguin", "snowman", "duckling", "red fire truck"]
     places = ["snowy winter forest"]
     tiles = []
     for i, nm in enumerate(items):
