@@ -78,14 +78,30 @@ PAGES = [
 
 
 def clean(im):
-    """Grayscale render -> pure black lines on white; returns (image, black ratio)."""
-    g = im.convert("L")
-    g = g.resize((g.width * 2, g.height * 2), Image.LANCZOS).filter(ImageFilter.GaussianBlur(1.2))
-    a = np.array(g)
-    bw = (a > 165).astype(np.uint8) * 255
-    out = Image.fromarray(bw).filter(ImageFilter.MedianFilter(5))
-    ratio = 1 - np.array(out).mean() / 255
-    return out, float(ratio)
+    """Render -> pure black lines on white; returns (image, black ratio).
+
+    Thin dark strokes are kept (black-hat filter); big dark fills are turned into outlines,
+    so a page that came out shaded still becomes a usable colouring page."""
+    import cv2
+    g = np.array(im.convert("L").resize((im.width * 2, im.height * 2), Image.LANCZOS))
+    g = cv2.GaussianBlur(g, (3, 3), 0)
+    simple = g < 165
+    if 0.03 <= simple.mean() <= 0.20:  # already clean line art: keep it as drawn
+        ink = cv2.medianBlur(simple.astype(np.uint8) * 255, 5) > 0
+        return Image.fromarray(np.where(ink, 0, 255).astype(np.uint8)), float(ink.mean())
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+    lines = cv2.morphologyEx(g, cv2.MORPH_BLACKHAT, k) > 50
+    dark = (g < 100).astype(np.uint8)
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
+    rim = cv2.morphologyEx(dark, cv2.MORPH_GRADIENT, np.ones((7, 7), np.uint8)) > 0
+    ink = (lines | rim).astype(np.uint8)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    keep = np.zeros(n, bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= 60
+    ink = keep[lab]
+    out = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
+    return out, float(ink.mean())
 
 
 def page(i, attempt):
@@ -93,6 +109,14 @@ def page(i, attempt):
     old = artgen.NEG
     artgen.NEG = NEG
     try:
+        if not artgen.XL:
+            artgen.pipe()
+        if artgen.XL:  # 0.8 MP is plenty for line art and keeps memory well inside 16 GB
+            import torch
+            g = torch.Generator("cpu").manual_seed(5000 + i * 37 + attempt * 991)
+            with torch.inference_mode():
+                return artgen.pipe()(prompt=prompt, negative_prompt=NEG, width=768, height=1024,
+                                     num_inference_steps=5, guidance_scale=1.4, generator=g).images[0]
         return artgen.generate(prompt, 768, 1024, 5000 + i * 37 + attempt * 991)
     finally:
         artgen.NEG = old
@@ -104,26 +128,45 @@ def main():
     if "--cover" in sys.argv:
         for k, (name, p) in enumerate([
             ("cover_unicorn", "a cute baby unicorn with rainbow mane, isolated on plain white background"),
-            ("cover_mermaid", "a cute little mermaid with red hair and teal tail waving, isolated on plain white background"),
-            ("cover_princess", "a cute little princess in a pink gown with a crown, isolated on plain white background"),
-            ("cover_castle", "a magical pastel fairytale castle on clouds with a rainbow, wide scene"),
+            ("cover_mermaid", "a cute little mermaid girl with short curly blonde hair, a lavender purple tail and a "
+             "starfish hairclip, full body, waving, isolated on plain white background"),
+            ("cover_princess", "a cute little girl princess in a lavender ball gown with a small silver tiara, full body "
+             "from head to shoes, standing and smiling, isolated on plain white background"),
+            ("cover_castle", "a small whimsical pastel cottage castle with round towers and heart shaped windows on a "
+             "green hill, wide scene, sunny sky"),
         ]):
             w, h = (1024, 768) if name == "cover_castle" else (832, 832)
             artgen.generate(f"{p}, {artgen.STYLE}", w, h, 900 + k).save(f"{OUT}/{name}.png")
             print("made", name, flush=True)
         return
+    if "--one=" in " ".join(sys.argv):
+        one(int(next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--one="))))
+        return
     shard = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--shard=")), "0/1")
     k, n = map(int, shard.split("/"))
-    for i in range(k, len(PAGES), n):
+    todo = list(range(k, len(PAGES), n))
+    only = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--pages=")), "")
+    if not only and os.path.exists("coloring_todo.txt"):  # re-run only the pages listed there
+        only = open("coloring_todo.txt").read().strip()
+    if only:
+        todo = [int(x) for x in only.split(",") if x.strip()][k::n]
+    import subprocess
+    env = dict(os.environ, MALLOC_ARENA_MAX="2")
+    for i in todo:  # one process per page: the model is re-loaded, but memory never piles up
+        subprocess.run([sys.executable, os.path.abspath(__file__), f"--one={i}"], env=env, check=False)
+
+
+def one(i):
+    if True:
         best = None
         for attempt in range(3):
             t0 = time.time()
             raw = page(i, attempt)
             bw, ratio = clean(raw)
             print(f"page {i:02d} try {attempt}: black {ratio:.2f} ({time.time() - t0:.0f}s)", flush=True)
-            if best is None or abs(ratio - 0.12) < abs(best[1] - 0.12):
+            if best is None or abs(ratio - 0.09) < abs(best[1] - 0.09):
                 best = (bw, ratio, raw)
-            if 0.04 <= ratio <= 0.22:
+            if 0.03 <= ratio <= 0.20:
                 break
         best[0].save(f"{OUT}/page_{i:02d}.png")
         best[2].save(f"{OUT}/raw_{i:02d}.jpg", quality=85)
