@@ -45,6 +45,7 @@ CONFIG = {
     "height": 720,
     "fps": 24,
     "renderer": "studio",
+    "upload_fallback": False,  # never publish the canned offline episode (Gemini down) - avoids repeated content
     "shorts_upload": True,  # True = also upload the automatic ~55 s vertical Short of every episode  # "studio" = picture-book renderer (studio.py), "classic" = old emoji renderer
     "art_budget_s": 4200,  # max seconds per video spent creating new pictures (they are cached in assets/lib)
     "text_model": "gemini-2.5-flash",
@@ -1008,6 +1009,7 @@ def plan_episode(lang, fmt, ep, state):
     if not data:
         print(f"Using offline fallback script for {lang}")
         data = fallback_episode(lang)
+        data["_fallback"] = True
         fmt = "animals"
     elif fmt == "letters":
         state["letter_pos"][lang] = (state["letter_pos"].get(lang, 0) + len(letters)) % len(LANG[lang]["alphabet"])
@@ -1038,7 +1040,7 @@ def make_video(lang, fmt, ep, state, out_path):
     except Exception as e:  # noqa: BLE001
         print("SEO step failed:", e, flush=True)
     print("Description:\n" + desc, flush=True)
-    return {"title": title[:100], "description": desc, "tags": tags, "format": fmt, "theme": data.get("theme", ""),
+    return {"fallback": bool(data.get("_fallback")), "title": title[:100], "description": desc, "tags": tags, "format": fmt, "theme": data.get("theme", ""),
             "thumb": extras.get("thumb"), "short": extras.get("short"),
             "short_title": (data.get("short_title") or title.split("|")[0].strip())[:88] + " #shorts"}
 
@@ -1091,6 +1093,12 @@ def upload(path, title, description, tags, language, privacy="public", category_
 
 
 # ----------------------------------------------------------------- main
+def save_state(state_path, state):
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    tmp.replace(state_path)
+
+
 def main():
     (ROOT / "out").mkdir(exist_ok=True)
     state_path = ROOT / "state.json"
@@ -1099,6 +1107,7 @@ def main():
     fmt = CONFIG["formats"][(ep - 1) % len(CONFIG["formats"])]
     dry = "--dry-run" in sys.argv
     langs = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--lang=")] or CONFIG["languages"]
+    uploaded = 0
     for lang in langs:
         out = ROOT / "out" / f"video_{lang}.mp4"
         print(f"=== Episode {ep}: {fmt} ({lang})")
@@ -1106,21 +1115,27 @@ def main():
         print("Title:", meta["title"])
         if dry:
             continue
+        if meta.get("fallback") and not CONFIG.get("upload_fallback"):
+            print(f"Skipping upload for {lang}: Gemini script failed and the offline fallback is not published.", flush=True)
+            continue
         vid = upload(str(out), meta["title"], meta["description"], meta["tags"], lang,
                      CONFIG["privacy"], CONFIG["category_id"], thumb=meta.get("thumb"))
         state["history"].append({"episode": ep, "lang": lang, "format": meta["format"], "video_id": vid,
                                  "title": meta["title"], "theme": meta.get("theme", ""),
                                  "date": datetime.date.today().isoformat()})
+        state["episode"] = ep
+        save_state(state_path, state)  # saved right away so a later failure never causes a duplicate upload
+        uploaded += 1
         if CONFIG.get("shorts_upload") and meta.get("short") and os.path.exists(meta["short"]):
             try:
                 sid = upload(meta["short"], meta["short_title"], meta["description"], meta["tags"], lang,
                              CONFIG["privacy"], CONFIG["category_id"])
                 state["history"][-1]["short_id"] = sid
+                save_state(state_path, state)
             except Exception as e:  # noqa: BLE001
                 print("Short upload failed:", e, flush=True)
-    if not dry:
-        state["episode"] = ep
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    if not dry and not uploaded:
+        print("Nothing was uploaded in this run.", flush=True)
 
 
 if __name__ == "__main__":
