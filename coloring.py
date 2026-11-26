@@ -63,7 +63,7 @@ PAGES = [
     "a cute little mermaid wearing a seashell top and a sea turtle exploring a coral reef",
     "an underwater castle made of shells and coral with little fish",
     "a cute little mermaid wearing a seashell top combing her long hair with a seashell comb",
-    "a cute little mermaid wearing a seashell top holding a big pearl in an open clam shell",
+    "a cute little mermaid wearing a seashell top blowing bubbles with a smiling starfish and a little fish",
     "a cute little mermaid wearing a seashell top playing with a friendly octopus",
     "a cute little mermaid wearing a seashell top riding a seahorse",
     "a cute little mermaid wearing a seashell top and a crab having a picnic on the beach",
