@@ -480,12 +480,15 @@ class ArtLib:
 
     def find_item(self, name):
         """Library picture for this name: exact, or a stored subject whose words are all in the name."""
+        good = v2_items(self.dir)  # only pictures cut with the AI cutter; old ones carry backdrop patches
         path = self.dir / "items" / f"{slug(name)}.webp"
-        if path.exists():
+        if path.exists() and path.stem in good:
             return path
         words = set(slug(name).split("-"))
         best = None
         for f in (self.dir / "items").glob("*.webp"):
+            if f.stem not in good:
+                continue
             kw = set(f.stem.split("-"))
             if kw and kw <= words and (best is None or len(kw) > len(set(best.stem.split("-")))):
                 best = f
@@ -507,7 +510,7 @@ class ArtLib:
 
     def item(self, name, exact=False, redo=False):
         path = self.dir / "items" / f"{slug(name)}.webp"
-        if path.exists() and not redo:
+        if path.exists() and not redo and path.stem in v2_items(self.dir):
             self.stats["cache"] += 1
             return Image.open(path).convert("RGBA")
         fuzzy = None if exact else self.find_item(name)
@@ -556,7 +559,8 @@ def mark_v2(libdir, stem):
 
 def library_names(root):
     d = Path(root) / "assets" / "lib"
-    items = sorted(f.stem.replace("-", " ") for f in (d / "items").glob("*.webp"))
+    good = v2_items(d)
+    items = sorted(f.stem.replace("-", " ") for f in (d / "items").glob("*.webp") if f.stem in good)
     places = sorted(f.stem.replace("-", " ") for f in (d / "bg").glob("*.jpg"))
     return items, places
 
