@@ -1202,6 +1202,9 @@ def banned(sd):
     return bool(BANNED.search(txt)) or any(e in BANNED_EMOJI for e in (sd.get("show") or []))
 
 
+MYSTERY = {"❓", "?", "❔", "👤", "👥", "🕵", "🕵️", "🤔", "🫥", "⬛", "🔍"}
+
+
 def plan(episode, lang):
     raw = list(episode["scenes"])
     drop = set()
@@ -1232,11 +1235,14 @@ def plan(episode, lang):
         art = [re.sub(r"\b(silhouette|shadow|mystery|hidden)\b", "", a, flags=re.I).strip(" ,-")
                for a in (sd.get("art") or []) if isinstance(a, str) and a.strip()][:3]
         if kind == "hide":
+            # the silhouette must be exactly the picture that the next (reveal) scene shows
             nxt = raw[i + 1] if i + 1 < len(raw) else {}
-            if not art:
-                art = [a for a in (nxt.get("art") or []) if isinstance(a, str)][:1]
-            if not show or show[0] in ("❓", "?"):
-                show = [e for e in (nxt.get("show") or []) if isinstance(e, str)][:1] or show
+            nart = [re.sub(r"\b(silhouette|shadow|mystery|hidden)\b", "", a, flags=re.I).strip(" ,-")
+                    for a in (nxt.get("art") or []) if isinstance(a, str) and a.strip()][:1]
+            art = nart or art
+            nshow = [e for e in (nxt.get("show") or []) if isinstance(e, str) and e.strip() and e not in MYSTERY][:1]
+            if nshow or not show or show[0] in MYSTERY:
+                show = nshow or ["⭐"]
             show, art = show[:1], art[:1]
         if kind in ("intro", "outro"):
             show = [e for e in show if e not in ("🦉",)][:2]
