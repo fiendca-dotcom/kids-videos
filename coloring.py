@@ -121,12 +121,12 @@ def main():
     os.environ.setdefault("ART_XL", "1")
     os.makedirs(OUT, exist_ok=True)
     if "--cover" in sys.argv:
-        artgen.NEG = artgen.NEG + ", legs, feet, nude, topless"
+        artgen.NEG = artgen.NEG + ", nude, topless, red hair"
         for k, (name, p) in enumerate([
             ("cover_unicorn", "a cute baby unicorn with rainbow mane, isolated on plain white background"),
-            ("cover_mermaid", "a cute chibi mermaid girl with a long fish tail and a seashell top girl with short curly blonde hair, a lavender purple tail and a "
-             "starfish hairclip, full body, waving, isolated on plain white background"),
-            ("cover_princess", "a cute little girl princess with black curly hair in a mint green ball gown with a flower crown, full body "
+            ("cover_mermaid", "a cute chibi mermaid girl with a long teal fish tail instead of legs and a seashell top, short "
+             "wavy blonde hair, floating and waving, full body, isolated on plain white background"),
+            ("cover_princess", "a cute little girl princess with a short black bob haircut in a coral pink and peach ball gown with a tiny gold tiara, full body "
              "from head to shoes, standing and smiling, isolated on plain white background"),
             ("cover_castle", "a small whimsical pastel cottage castle with round towers and heart shaped windows on a "
              "green hill, wide scene, sunny sky"),
