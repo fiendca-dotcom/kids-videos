@@ -40,7 +40,7 @@ jobs:
           python bot.py --dry-run
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git add assets/lib 2>/dev/null || true
-          git diff --cached --quiet || (git commit -m "art library" && git pull --rebase --autostash origin main && git push)
+          git diff --cached --quiet || (git commit -m "art library" && git pull --rebase --autostash origin "${{ github.ref_name }}" && git push)
       - if: ${{ github.event_name == 'schedule' || !inputs.test }}
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
@@ -56,7 +56,7 @@ jobs:
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git add state.json && (git add assets/lib 2>/dev/null || true)
           git diff --cached --quiet || git commit -m "episode"
-          git pull --rebase --autostash origin main && git push
+          git pull --rebase --autostash origin "${{ github.ref_name }}" && git push
       - if: always()
         uses: actions/upload-artifact@v4
         with:
