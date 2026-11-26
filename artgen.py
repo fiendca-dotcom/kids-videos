@@ -26,7 +26,7 @@ def big_machine():
     return mem >= 14 and (os.cpu_count() or 1) >= 4
 
 
-STYLE = "cute 3d cartoon, pixar style, picture book art, adorable, soft warm light, pastel colours, fluffy, detailed"
+STYLE = "pixar style 3d render, disney pixar animation, adorable, big expressive eyes, soft warm light, vibrant, highly detailed"
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
        "weapon, photo, photorealistic, pig, piglet, shadow, floor, ground, reflection, glow")
@@ -66,6 +66,12 @@ def pipe():
                 p = StableDiffusionXLPipeline.from_pretrained(XL_MODEL, **kw)
             p.scheduler = DPMSolverMultistepScheduler.from_config(
                 p.scheduler.config, algorithm_type="sde-dpmsolver++", use_karras_sigmas=True)
+            try:  # tiny VAE: decoding a 1 MP picture on CPU drops from ~60 s to ~2 s
+                from diffusers import AutoencoderTiny
+                p.vae = AutoencoderTiny.from_pretrained("madebyollin/taesdxl", torch_dtype=torch.float32)
+            except Exception as e:  # noqa: BLE001
+                log("tiny VAE not available:", str(e)[:120])
+            p.unet.to(memory_format=torch.channels_last)
             p.set_progress_bar_config(disable=True)
             _P, XL = p, True
             log(f"Local art model ready in {time.time() - t0:.0f}s ({XL_MODEL}, SDXL, {os.cpu_count()} CPUs)")
@@ -99,7 +105,7 @@ def generate(prompt, w, h, seed, steps=4, guidance=1.3):
         if XL:  # SDXL works natively around 1 megapixel; objects are cut out and shown <= 600 px
             k = ((832 * 832 if w == h else 1024 * 1024) / (w * h)) ** 0.5
             W, H = int(w * k) // 64 * 64, int(h * k) // 64 * 64
-            return p(prompt=prompt, negative_prompt=NEG, width=W, height=H, num_inference_steps=5,
+            return p(prompt=prompt, negative_prompt=NEG, width=W, height=H, num_inference_steps=4,
                      guidance_scale=2.0, generator=g).images[0]
         return p(prompt=prompt, negative_prompt=NEG, width=w, height=h, num_inference_steps=steps,
                  guidance_scale=guidance, generator=g).images[0]
@@ -138,13 +144,13 @@ def item_prompt(name):
         key = next((w for w in reversed(name.split()) if w in HINTS), None)
         desc = name if key is None else f"{name}, {HINTS[key]}"
     if name in ANIMALS or any(w in ANIMALS for w in name.split()):
-        return f"one cute baby {desc}, {STYLE}, full body, centered, isolated on plain white background"
-    return f"one {desc}, simple cute 3d cartoon object, {STYLE}, centered, isolated on plain white background"
+        return f"one cute baby {desc}, full body, centered, isolated on plain white background, {STYLE}"
+    return f"one {desc}, centered, isolated on plain white background, simple cute 3d cartoon object, {STYLE}"
 
 
 def bg_prompt(place):
-    return (f"{place}, children's storybook illustration, soft digital painting, painterly, warm golden light, "
-            "pastel colours, cute cartoon environment, wide background, no animals, no people")
+    return (f"{place}, pixar style 3d animated movie background, disney pixar environment art, warm golden light, "
+            "vibrant colours, highly detailed, wide shot, empty scene, no animals, no people")
 
 
 def release():
@@ -159,8 +165,8 @@ def demo(out="out/art_demo"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import studio
     os.makedirs(out, exist_ok=True)
-    items = ["cow", "duckling", "snowman", "banana", "red toy train"]
-    places = ["sunny farm meadow with a red barn", "snowy winter forest"]
+    items = ["penguin", "snowman", "duckling", "red toy train"]
+    places = ["snowy winter forest"]
     tiles = []
     for i, nm in enumerate(items):
         t0 = time.time()
