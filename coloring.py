@@ -16,8 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import artgen  # noqa: E402
 
 OUT = "out/coloring"
-LINE = ("coloring book page for kids, black and white line art, thick clean bold outlines, no shading, "
-        "no gray, white background, cute cartoon, simple shapes, big areas to color")
+LINE = ("kids coloring book page, cute chibi pixar style character design, big sparkly eyes, round soft shapes, "
+        "black and white line art, thick clean bold outlines, no shading, no gray, white background, "
+        "simple uncluttered background, big areas to color")
 NEG = ("color, colored, shading, grayscale, gradient, shadow, hatching, texture, dark fill, solid black areas, "
        "text, letters, words, watermark, signature, frame, border, photo, realistic, blurry, scary, ugly, "
        "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig, two horns, multiple horns, 3d render, colorful")
@@ -58,22 +59,22 @@ PAGES = [
     "a cute unicorn with one horn blowing dandelion seeds in a sunny meadow",
     "a cute baby unicorn with one horn sleeping on a crescent moon with stars",
     # mermaids
-    "a cute little mermaid wearing a seashell top sitting on a rock in the sea with waves and seagulls",
-    "a cute little mermaid wearing a seashell top swimming with a happy dolphin",
-    "a cute little mermaid wearing a seashell top and a sea turtle exploring a coral reef",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top sitting on a rock in the sea with waves and seagulls",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top swimming with a happy dolphin",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top and a sea turtle exploring a coral reef",
     "an underwater castle made of shells and coral with little fish",
-    "a cute little mermaid wearing a seashell top combing her long hair with a seashell comb",
-    "a cute little mermaid wearing a seashell top blowing bubbles with a smiling starfish and a little fish",
-    "a cute little mermaid wearing a seashell top playing with a friendly octopus",
-    "a cute little mermaid wearing a seashell top riding a seahorse",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top combing her long hair with a seashell comb",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top blowing bubbles with a smiling starfish and a little fish",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top playing with a friendly octopus",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top riding a seahorse",
     "a cute chibi mermaid girl with a long fish tail wearing a seashell top swimming next to a smiling crab and big seashells",
-    "a cute little mermaid wearing a seashell top reading a book in an underwater garden",
-    "a cute little mermaid wearing a seashell top waving from inside a giant seashell",
-    "a cute little mermaid wearing a seashell top and a baby whale blowing bubbles",
-    "a cute little mermaid wearing a seashell top finding a treasure chest with jewels",
-    "a cute little mermaid wearing a seashell top with a starfish crown and jellyfish friends",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top reading a book in an underwater garden",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top waving from inside a giant seashell",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top and a baby whale blowing bubbles",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top finding a treasure chest with jewels",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top with a starfish crown and jellyfish friends",
     "a cute chibi mermaid girl with a long fish tail wearing a seashell top swimming under a big round moon with bubbles and stars",
-    "a cute little mermaid wearing a seashell top and a puffer fish making music with shells",
+    "a cute chibi mermaid girl with a long fish tail and a seashell top and a puffer fish making music with shells",
 ]
 
 
@@ -106,21 +107,14 @@ def clean(im):
 
 def page(i, attempt):
     prompt = f"{PAGES[i]}, {LINE}"
-    neg = NEG + (", legs, feet, knees, toes, human legs" if "mermaid" in PAGES[i] else "")
-    old = artgen.NEG
-    artgen.NEG = NEG
-    try:
-        if not artgen.XL:
-            artgen.pipe()
-        if artgen.XL:  # 0.8 MP is plenty for line art and keeps memory well inside 16 GB
-            import torch
-            g = torch.Generator("cpu").manual_seed(5000 + i * 37 + attempt * 991)
-            with torch.inference_mode():
-                return artgen.pipe()(prompt=prompt, negative_prompt=neg, width=768, height=1024,
-                                     num_inference_steps=5, guidance_scale=1.4, generator=g).images[0]
-        return artgen.generate(prompt, 768, 1024, 5000 + i * 37 + attempt * 991)
-    finally:
-        artgen.NEG = old
+    neg = NEG + (", legs, feet, knees, toes, human legs, red hair" if "mermaid" in PAGES[i] else "")
+    if not artgen.XL:
+        artgen.pipe()
+    import torch
+    g = torch.Generator("cpu").manual_seed(5000 + i * 37 + attempt * 991)
+    with torch.inference_mode():
+        return artgen.pipe()(prompt=prompt, negative_prompt=neg, width=896, height=1152,
+                             num_inference_steps=6, guidance_scale=1.5, generator=g).images[0]
 
 
 def main():
@@ -130,7 +124,7 @@ def main():
         artgen.NEG = artgen.NEG + ", legs, feet, nude, topless"
         for k, (name, p) in enumerate([
             ("cover_unicorn", "a cute baby unicorn with rainbow mane, isolated on plain white background"),
-            ("cover_mermaid", "a cute little mermaid wearing a seashell top girl with short curly blonde hair, a lavender purple tail and a "
+            ("cover_mermaid", "a cute chibi mermaid girl with a long fish tail and a seashell top girl with short curly blonde hair, a lavender purple tail and a "
              "starfish hairclip, full body, waving, isolated on plain white background"),
             ("cover_princess", "a cute little girl princess with black curly hair in a mint green ball gown with a flower crown, full body "
              "from head to shoes, standing and smiling, isolated on plain white background"),
@@ -164,24 +158,39 @@ def colorful(im):
     return float((hsv[..., 1] > 60).mean()) > 0.15
 
 
+def quality(bw, raw):
+    """Lower is better: wrong amount of ink, solid black blobs, stray specks or a coloured render."""
+    import cv2
+    ink = (np.array(bw) < 128).astype(np.uint8)
+    ratio = float(ink.mean())
+    solid = float((cv2.distanceTransform(ink, cv2.DIST_L2, 3) > 6).sum()) / max(1, ink.sum())
+    n, _, st, _ = cv2.connectedComponentsWithStats(ink, 8)
+    specks = int((st[1:, cv2.CC_STAT_AREA] < 150).sum())
+    col = colorful(raw)
+    score = abs(ratio - 0.08) * 8 + solid * 4 + specks / 300.0 + (3.0 if col else 0.0)
+    return score, ratio, solid, specks, col
+
+
 def one(i):
-    if os.environ.get("COLOR_MODE", "pixar") == "pixar":  # Pixar render traced into line art
+    if os.environ.get("COLOR_MODE", "line") == "pixar":  # experimental: Pixar render traced into line art
         import pixarline
         return pixarline.one(i, PAGES[i], OUT)
-    best = None
-    for attempt in range(6):
+    cands = []
+    for attempt in range(4):
         t0 = time.time()
         raw = page(i, attempt)
-        bw, ratio = clean(raw)
-        col = colorful(raw)
-        print(f"page {i:02d} try {attempt}: black {ratio:.2f} colour {col} ({time.time() - t0:.0f}s)", flush=True)
-        score = abs(ratio - 0.09) + (1.0 if col else 0.0)
-        if best is None or score < best[3]:
-            best = (bw, ratio, raw, score)
-        if not col and 0.03 <= ratio <= 0.20:
+        bw, _ = clean(raw)
+        q = quality(bw, raw)
+        print(f"page {i:02d} try {attempt}: score {q[0]:.2f} ink {q[1]:.3f} solid {q[2]:.2f} specks {q[3]} "
+              f"colour {q[4]} ({time.time() - t0:.0f}s)", flush=True)
+        cands.append((q[0], attempt, bw, raw))
+        if len(cands) >= 2 and min(c[0] for c in cands) < 0.45:
             break
-    best[0].save(f"{OUT}/page_{i:02d}.png")
-    best[2].save(f"{OUT}/raw_{i:02d}.jpg", quality=85)
+    cands.sort(key=lambda c: c[0])
+    cands[0][2].save(f"{OUT}/page_{i:02d}.png")
+    cands[0][3].save(f"{OUT}/raw_{i:02d}.jpg", quality=85)
+    if len(cands) > 1:  # runner-up, so a weak pick can be swapped without another run
+        cands[1][2].save(f"{OUT}/alt_{i:02d}.png")
 
 
 if __name__ == "__main__":
