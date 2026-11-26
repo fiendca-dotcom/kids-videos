@@ -121,13 +121,21 @@ HINTS = {
     "mitten": "pair of knitted red mittens", "winter hat": "knitted winter hat with pom pom", "scarf": "striped knitted scarf",
     "sled": "wooden sled", "gift box": "gift box with red ribbon bow", "hot cocoa": "mug of hot cocoa with marshmallows",
     "bell": "golden bell", "star": "golden star", "moon": "crescent moon", "sun": "smiling sun", "cloud": "fluffy white cloud",
+    "snowflake": "big white and pale blue six-pointed snowflake crystal, flat ornament",
+    "sparkling blue snowflake": "big white and pale blue six-pointed snowflake crystal, flat ornament",
+    "ice skate": "white ice skate boot with silver blade", "penguin": "black and white baby penguin with orange feet",
+    "fox": "orange fox with white chest and fluffy tail", "deer": "brown baby deer fawn with white spots",
+    "bunny": "fluffy white bunny rabbit", "owl": "brown baby owl",
     "ball": "colourful beach ball", "key": "golden key", "book": "children's book", "dinosaur": "friendly green dinosaur",
 }
 
 
 def item_prompt(name):
-    desc = HINTS.get(name, name)
-    if name in ANIMALS or name.split()[-1] in ANIMALS:
+    desc = HINTS.get(name)
+    if desc is None:  # "cute penguin standing on ice" -> hint of its main word
+        key = next((w for w in reversed(name.split()) if w in HINTS), None)
+        desc = name if key is None else f"{name}, {HINTS[key]}"
+    if name in ANIMALS or any(w in ANIMALS for w in name.split()):
         return f"one cute baby {desc}, {STYLE}, full body, centered, isolated on plain white background"
     return f"one {desc}, simple cute 3d cartoon object, {STYLE}, centered, isolated on plain white background"
 
