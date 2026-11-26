@@ -30,7 +30,7 @@ PAGES = [
     "a little princess riding a pony through a flower meadow",
     "a little princess reading a book under a big tree with birds",
     "a little princess dancing at a ball with sparkles and stars",
-    "a royal carriage shaped like a pumpkin pulled by two horses",
+    "a little princess waving from a flower covered royal carriage pulled by two cute ponies",
     "a little princess watering roses in a palace garden with butterflies",
     "a little princess holding a magic wand with stars around her",
     "a little princess with a kitten in a cozy bedroom with a canopy bed",
@@ -165,6 +165,9 @@ def colorful(im):
 
 
 def one(i):
+    if os.environ.get("COLOR_MODE", "pixar") == "pixar":  # Pixar render traced into line art
+        import pixarline
+        return pixarline.one(i, PAGES[i], OUT)
     best = None
     for attempt in range(6):
         t0 = time.time()
