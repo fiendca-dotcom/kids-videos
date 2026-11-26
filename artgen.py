@@ -17,13 +17,15 @@ XL_MODEL = os.environ.get("ART_XL_MODEL", "Lykon/dreamshaper-xl-lightning")
 
 def big_machine():
     """SDXL needs ~11 GB RAM; public-repo GitHub runners have 16 GB and 4 CPUs."""
-    if os.environ.get("ART_XL") != "1":  # SDXL is ~10 min/image on CPU: nightly library only
+    if os.environ.get("ART_XL") == "0":
         return False
     try:
         mem = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
     except (ValueError, OSError, AttributeError):
         mem = 0
     return mem >= 14 and (os.cpu_count() or 1) >= 4
+
+
 STYLE = "cute 3d cartoon, pixar style, picture book art, adorable, soft warm light, pastel colours, fluffy, detailed"
 NEG = ("text, letters, words, watermark, signature, logo, frame, border, scary, horror, creepy, angry, ugly, deformed, "
        "disfigured, mutated, extra limbs, extra heads, bad anatomy, blurry, lowres, jpeg artifacts, nsfw, violence, blood, "
@@ -94,8 +96,8 @@ def generate(prompt, w, h, seed, steps=4, guidance=1.3):
     p = pipe()
     g = torch.Generator("cpu").manual_seed(int(seed) % (2 ** 31))
     with torch.inference_mode():
-        if XL:  # SDXL works natively around 1 megapixel
-            k = (1024 * 1024 / (w * h)) ** 0.5
+        if XL:  # SDXL works natively around 1 megapixel; objects are cut out and shown <= 600 px
+            k = ((832 * 832 if w == h else 1024 * 1024) / (w * h)) ** 0.5
             W, H = int(w * k) // 64 * 64, int(h * k) // 64 * 64
             return p(prompt=prompt, negative_prompt=NEG, width=W, height=H, num_inference_steps=5,
                      guidance_scale=2.0, generator=g).images[0]
