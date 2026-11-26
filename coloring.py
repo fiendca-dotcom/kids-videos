@@ -20,7 +20,7 @@ LINE = ("coloring book page for kids, black and white line art, thick clean bold
         "no gray, white background, cute cartoon, simple shapes, big areas to color")
 NEG = ("color, colored, shading, grayscale, gradient, shadow, hatching, texture, dark fill, solid black areas, "
        "text, letters, words, watermark, signature, frame, border, photo, realistic, blurry, scary, ugly, "
-       "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig")
+       "deformed, extra limbs, bad anatomy, nsfw, nude, nudity, topless, nipples, bare chest, pig, two horns, multiple horns, 3d render, colorful")
 
 PAGES = [
     # princesses
@@ -39,24 +39,24 @@ PAGES = [
     "a jeweled crown and a tiara on a cushion with gems and hearts",
     "a little princess on a swing hanging from a tree with flowers",
     "a little princess and a frog wearing a tiny crown by a pond",
-    "a little princess looking at the moon and stars from a castle balcony",
+    "a little princess waving from a castle window at night with a big round moon and a few stars",
     # unicorns
     "a cute baby unicorn with a flowing mane standing on a fluffy cloud with a rainbow",
-    "a cute unicorn galloping through a field of flowers",
+    "a cute baby unicorn with one horn running on a grassy hill with a few big flowers",
     "a cute unicorn sleeping on a cloud under a crescent moon and stars",
     "a cute unicorn eating an ice cream cone",
     "a cute unicorn with butterfly wings flying over hills",
     "a mother unicorn and a baby unicorn cuddling with hearts",
-    "a cute unicorn wearing a flower crown in a magical forest with mushrooms",
+    "a cute baby unicorn with one horn wearing a flower crown next to big cute mushrooms",
     "a cute unicorn blowing out candles on a birthday cake",
-    "a cute unicorn jumping over a rainbow with clouds",
+    "a cute baby unicorn with one horn standing on a fluffy cloud under a rainbow",
     "a cute unicorn reading a book with glasses in a cozy library",
-    "a cute unicorn and a bunny playing with balloons",
+    "a cute baby unicorn with one horn and a little bunny holding balloons together",
     "a cute unicorn splashing in a pond with lily pads and a frog",
     "a cute unicorn in the snow building a snowman",
     "a cute unicorn with a big bow sitting among cupcakes and candy",
     "a cute unicorn with one horn blowing dandelion seeds in a sunny meadow",
-    "a cute unicorn sitting on a crescent moon with stars",
+    "a cute baby unicorn with one horn sleeping on a crescent moon with stars",
     # mermaids
     "a cute little mermaid wearing a seashell top sitting on a rock in the sea with waves and seagulls",
     "a cute little mermaid wearing a seashell top swimming with a happy dolphin",
@@ -66,13 +66,13 @@ PAGES = [
     "a cute little mermaid wearing a seashell top blowing bubbles with a smiling starfish and a little fish",
     "a cute little mermaid wearing a seashell top playing with a friendly octopus",
     "a cute little mermaid wearing a seashell top riding a seahorse",
-    "a cute little mermaid wearing a seashell top and a crab having a picnic on the beach",
+    "a cute little mermaid with a fish tail wearing a seashell top sitting on a rock at the beach next to a smiling crab",
     "a cute little mermaid wearing a seashell top reading a book in an underwater garden",
     "a cute little mermaid wearing a seashell top waving from inside a giant seashell",
     "a cute little mermaid wearing a seashell top and a baby whale blowing bubbles",
     "a cute little mermaid wearing a seashell top finding a treasure chest with jewels",
     "a cute little mermaid wearing a seashell top with a starfish crown and jellyfish friends",
-    "a cute little mermaid wearing a seashell top looking at the moon from the sea at night",
+    "a cute little mermaid with a fish tail wearing a seashell top sitting on a rock looking at the moon, simple waves",
     "a cute little mermaid wearing a seashell top and a puffer fish making music with shells",
 ]
 
@@ -157,20 +157,27 @@ def main():
         subprocess.run([sys.executable, os.path.abspath(__file__), f"--one={i}"], env=env, check=False)
 
 
+def colorful(im):
+    """True when the model drew a coloured picture instead of line art."""
+    hsv = np.array(im.convert("HSV").resize((192, 256)))
+    return float((hsv[..., 1] > 60).mean()) > 0.15
+
+
 def one(i):
-    if True:
-        best = None
-        for attempt in range(3):
-            t0 = time.time()
-            raw = page(i, attempt)
-            bw, ratio = clean(raw)
-            print(f"page {i:02d} try {attempt}: black {ratio:.2f} ({time.time() - t0:.0f}s)", flush=True)
-            if best is None or abs(ratio - 0.09) < abs(best[1] - 0.09):
-                best = (bw, ratio, raw)
-            if 0.03 <= ratio <= 0.20:
-                break
-        best[0].save(f"{OUT}/page_{i:02d}.png")
-        best[2].save(f"{OUT}/raw_{i:02d}.jpg", quality=85)
+    best = None
+    for attempt in range(6):
+        t0 = time.time()
+        raw = page(i, attempt)
+        bw, ratio = clean(raw)
+        col = colorful(raw)
+        print(f"page {i:02d} try {attempt}: black {ratio:.2f} colour {col} ({time.time() - t0:.0f}s)", flush=True)
+        score = abs(ratio - 0.09) + (1.0 if col else 0.0)
+        if best is None or score < best[3]:
+            best = (bw, ratio, raw, score)
+        if not col and 0.03 <= ratio <= 0.20:
+            break
+    best[0].save(f"{OUT}/page_{i:02d}.png")
+    best[2].save(f"{OUT}/raw_{i:02d}.jpg", quality=85)
 
 
 if __name__ == "__main__":
