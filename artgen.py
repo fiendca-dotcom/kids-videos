@@ -150,7 +150,7 @@ def item_prompt(name):
     if name in ANIMALS or any(w in ANIMALS for w in name.split()):
         return f"one cute baby {desc}, full body, centered, isolated on plain white background, {STYLE}"
     if "snowman" in name:
-        return f"one {desc}, centered, isolated on plain white background, {STYLE}"
+        return f"one {desc}, full body from head to base, centered, isolated on plain white background, {STYLE}"
     return f"one {desc}, centered, isolated on plain white background, {OBJ_MARK}, {STYLE_OBJ}"
 
 
@@ -159,9 +159,43 @@ def bg_prompt(place):
             "vibrant colours, highly detailed, wide shot, empty scene, no animals, no people")
 
 
+_CLIP = None
+DISTRACT = ("cow dog cat duck bird fish horse sheep rabbit bear penguin fox lion elephant frog turtle owl apple banana "
+            "potato carrot ball car truck train house tree flower snowman hat sock cup star").split()
+
+
+def matches(im, name):
+    """Quality gate: does the picture really show `name`? CLIP must rank it above ~30 other subjects
+    and above 'deformed / blurry / pig'. Unknown problems (no CLIP) never block a picture."""
+    global _CLIP
+    try:
+        import torch
+        from transformers import CLIPModel, CLIPProcessor
+        if _CLIP is None:
+            mid = "openai/clip-vit-base-patch32"
+            _CLIP = (CLIPModel.from_pretrained(mid).eval(), CLIPProcessor.from_pretrained(mid))
+        model, proc = _CLIP
+        words = set(name.lower().split())
+        labels = [name] + [d for d in DISTRACT if d not in words and not any(d in w or w in d for w in words)]
+        labels += ["a blurry deformed shape", "a pig"]
+        texts = [f"a cartoon picture of {'an' if lb[0] in 'aeiou' else 'a'} {lb}" if not lb.startswith("a ") else lb
+                 for lb in labels]
+        with torch.inference_mode():
+            x = proc(text=texts, images=im.convert("RGB"), return_tensors="pt", padding=True)
+            pr = model(**x).logits_per_image.softmax(-1)[0]
+        ok = int(pr.argmax()) == 0
+        if not ok:
+            log(f"  quality gate: '{name}' looks like '{labels[int(pr.argmax())]}' ({float(pr.max()):.2f})")
+        return ok
+    except Exception as e:  # noqa: BLE001
+        log("  quality gate skipped:", str(e)[:120])
+        return True
+
+
 def release():
-    global _P
+    global _P, _CLIP
     _P = None
+    _CLIP = None
     import gc
     gc.collect()
 
@@ -179,7 +213,8 @@ def demo(out="out/art_demo"):
         im = generate(item_prompt(nm), 512, 512, 1000 + i)
         im.save(f"{out}/item_{i}.png")
         cut = studio.cutout(im)
-        log(f"item '{nm}': {time.time() - t0:.0f}s, cutout {'ok' if cut is not None else 'FAILED'}")
+        log(f"item '{nm}': {time.time() - t0:.0f}s, cutout {'ok' if cut is not None else 'FAILED'}, "
+            f"quality gate {'ok' if matches(im, nm) else 'REJECTED'}")
         st = studio.sticker(cut, 420) if cut is not None else im.convert("RGBA").resize((420, 420))
         bgc = Image.new("RGB", (520, 520), (90, 170, 90))
         st.thumbnail((500, 500))
