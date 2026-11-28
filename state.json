@@ -1,5 +1,5 @@
 {
-  "episode": 3,
+  "episode": 4,
   "history": [
     {
       "episode": 1,
@@ -42,6 +42,15 @@
       "theme": "Winter Snow and Cold Weather Fun",
       "date": "2026-11-26",
       "short_id": "gkVhnGaEQNY"
+    },
+    {
+      "episode": 4,
+      "lang": "en",
+      "format": "story",
+      "video_id": "wcXrhcfifiY",
+      "title": "Nuni's Fun Train Trip! | Vehicle Story for Kids",
+      "theme": "Vehicles & Helping Friends",
+      "date": "2026-11-28"
     }
   ]
 }
