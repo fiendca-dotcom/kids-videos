@@ -152,6 +152,7 @@ twinkling-star
 umbrella
 watermelon
 whale
+wheelbarrow
 winter-hat
 wooden-toy-train
 yellow-school-bus
